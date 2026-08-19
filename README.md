@@ -1,0 +1,160 @@
+# SIMASTER Lecturer Schedule Scraper
+
+Scrapes lecturer teaching schedules from the SIMASTER portal
+(`https://simaster.ugm.ac.id/akademik/dsn_jadwal_dosen/`) by attaching to a Google
+Chrome instance running on Windows from WSL2 over the Chrome DevTools Protocol
+(CDP).
+
+The target page requires a SIMASTER SSO login with an image/audio CAPTCHA. Instead
+of automating that flow, this project **reuses the session cookies** from the Chrome
+profile that already holds a SIMASTER login. No credentials are ever asked for.
+
+It is organized as an installable Python package (`simaster`) with a CLI, and
+supports both single-lecturer and batch scraping (from a text file of names).
+
+## Outputs
+
+Running the scraper produces two files per lecturer:
+
+- `jadwal_<name>_<semester>.csv` — flat rows, one per schedule entry.
+- `jadwal_<name>_<semester>.json` — nested: every course with its full schedule.
+
+The `<name>` part is the lecturer's slugified full name, e.g.
+`Matin Nuhamunada, S.Si., M.Sc.` → `jadwal_matin_nuhamunada_s_si_m_sc_20261.csv`.
+For the default run (semester `20261` / Gasal 2026-2027, lecturer *Matin
+Nuhamunada*) this yields **15 courses / 153 schedule entries**.
+
+## Prerequisites
+
+- Windows with Google Chrome installed.
+- WSL2 with conda (miniforge recommended).
+- A Windows Chrome profile whose SIMASTER session is still valid
+  (`C:\Users\<user>\AppData\Local\Google\Chrome\User Data`).
+
+## Steps
+
+### 1. Close every Chrome window on Windows
+
+The profile files (`Local State`, `Network/Cookies`) can only be copied when Chrome
+is not holding them. Close **all** Chrome windows first.
+
+### 2. Provision the conda environment (once)
+
+```bash
+conda env create -f environment.yml
+```
+
+Creates env `simaster` (Python 3.12 + Playwright), installs the `simaster` package
+(editable), and adds pytest. Playwright attaches to the existing Chrome over CDP,
+so **no browser download is needed**.
+
+> To pick up package changes after a `git pull`, re-run `conda env update -f
+> environment.yml` (the editable install tracks the source automatically).
+
+### 3. Run the setup script
+
+```bash
+bash setup.sh
+```
+
+`setup.sh` is idempotent and does four things:
+
+1. Copies the session profile (`Local State` + cookie DB) from
+   `C:\Users\asus\AppData\Local\Google\Chrome\User Data` into a dedicated
+   user-data dir `C:\Users\asus\simaster-scrape-udata`.
+2. Ensures a Windows portproxy `0.0.0.0:9223 -> 127.0.0.1:9222` plus a firewall
+   rule (needed because WSL2 NAT cannot reach a loopback-only port).
+3. Launches Chrome detached with `--remote-debugging-port=9222` on the copied
+   profile (skipped if the debug Chrome is already running).
+4. Verifies CDP connectivity from WSL.
+
+Why a copied profile? Chrome 136+ disables remote debugging for the **default**
+user-data dir. The copy keeps the session cookies while giving Chrome a dedicated,
+debriefable user-data dir.
+
+### 4. Run the scraper
+
+Single lecturer:
+
+```bash
+conda run -n simaster simaster --lecturer "Matin Nuhamunada"
+```
+
+Batch scraping from a file (one name per line, blank lines and `#` comments
+ignored):
+
+```bash
+conda run -n simaster simaster --names target.md
+```
+
+The old hardcoded entry point still works as a thin shim:
+
+```bash
+conda run -n simaster python -u scrape.py
+```
+
+If the SIMASTER session has expired, the scraper prints a message and polls for up
+to `--max-login-min` minutes (default 30) while you finish the login manually in
+the open Chrome window, then continues on its own.
+
+### CLI reference
+
+```
+simaster [--lecturer NAME]... [--names FILE]... [--semester SEMESTER]
+         [--outdir DIR] [--endpoint URL] [--max-login-min MIN]
+         [--verbose] [--version]
+```
+
+| Flag | Meaning |
+| ---- | ------- |
+| `--lecturer NAME` | Lecturer to scrape. Repeatable. |
+| `--names FILE` | Text file with one lecturer name per line. Repeatable. |
+| `--semester` | Semester code (default `20261`). |
+| `--outdir` | Output directory (default: current directory). |
+| `--endpoint` | CDP base URL, e.g. `http://172.31.160.1:9223` (default: auto-discovered WSL gateway). |
+| `--max-login-min` | Minutes to wait for a manual login (default `30`). |
+| `--verbose` | Print the full `list_dosen` responses. |
+
+Provide at least one `--lecturer` or `--names`. Names are deduplicated, and all
+lecturers share one Chrome session. Per-lecturer failures (e.g. an unresolvable
+`dosenId`) are reported and the remaining names are still scraped; the exit code
+is non-zero if any name failed.
+
+## Running the tests
+
+```bash
+conda run -n simaster pytest
+```
+
+The test suite is fully offline (parsing, pagination, batch inputs, output
+writing, CLI, and scraper orchestration against a fake page). A live-CDP test is
+available behind `@pytest.mark.integration` and is skipped by default.
+
+## Troubleshooting
+
+| Symptom | Likely cause | Fix |
+| ------- | ------------ | --- |
+| `setup.sh` warns the copied cookie DB is small | Source profile still running / locked | Close all Chrome windows, re-run `setup.sh` |
+| `curl` to `:9223` refused / times out | Portproxy or firewall rule missing, or WSL gateway IP changed | Re-run `bash setup.sh` (idempotent) |
+| `/json/version` empty even after setup | Chrome launched without `--user-data-dir`, or opened into the old default-profile instance | Close all Chrome, re-run `setup.sh` |
+| Scraper says "waiting for login..." forever | Session expired server-side | Log in manually in the debug Chrome window, or refresh the profile copy |
+| `0 rows` in output / `could not resolve dosenId` | `dosenId` could not be resolved (`list_dosen` response changed) | Re-run with `--verbose`, inspect the printed `list_dosen` body, and update the parsing in `src/simaster/parse.py` |
+
+## Security note
+
+`0.0.0.0:9223` exposes the debugging endpoint to the local network. Fine for
+personal use; close the debug Chrome when done.
+
+## Internals
+
+- **Filter** — the scraper resolves the lecturer id from
+  `.../dsn_jadwal_dosen/list_dosen?term=<name>` (response:
+  `[{"dosenId","dosenNama"}]`), fills the hidden `dosenId` + `sesi` + `dosen` with
+  the server's canonical name, and POSTs to `view_jadwal_mengajar`.
+- **Extraction** — course rows are 8-cell rows; each course's schedule entries
+  follow as 4-cell sibling `<tr>` rows (`[seq, waktu, ruang, dosen]`), including
+  hidden `closeData` rows. The browser-side JS reads every row into raw cell
+  arrays; the record/date parsing lives in pure Python (`src/simaster/parse.py`)
+  for testability. Dates (`Day DD-MM-YYYY HH:MM-HH:MM`) are normalized to ISO.
+- **Pagination** — `view_jadwal_mengajar/{offset}/1`, offset = `(page-1)*10`; the
+  filter persists server-side in session state so GET navigation works.
