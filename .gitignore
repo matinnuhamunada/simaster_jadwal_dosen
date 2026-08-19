@@ -1,0 +1,11 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+build/
+dist/
+
+# generated scrape outputs
+jadwal_*.csv
+jadwal_*.json
+data/

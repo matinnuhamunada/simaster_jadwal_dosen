@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "simaster"
+version = "0.1.0"
+description = "Scrape SIMASTER lecturer teaching schedules via Chrome DevTools Protocol"
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "MIT" }
+dependencies = [
+    "playwright",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+]
+
+[project.scripts]
+simaster = "simaster.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+cache_dir = "/tmp/simaster-pytest-cache"
+markers = [
+    "integration: requires a running debug Chrome reachable over CDP (see setup.sh)",
+]
