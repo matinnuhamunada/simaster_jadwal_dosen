@@ -68,15 +68,23 @@ in the attached browser.
    conda run -n simaster simaster --names target.md
    ```
    `python -m simaster ...` and the legacy `python -u scrape.py` shim also work.
-6. Aggregate teaching load (per-class share = `(own meetings / 14) * sks`):
+6. Clean the raw schedules (aggregate all CSVs, delete redundant sessions,
+   write a deduplicated per-lecturer dataset under `data/clean/`; raw `data/`
+   is never modified):
    ```bash
-   conda run -n simaster simaster analyze --dir data --semester 20261 \
-       --min 12 --max 16 --names target.md --outdir results
+   conda run -n simaster simaster clean --dir data --semester 20261 \
+       --names target.md --outdir data/clean
    ```
-7. Expected outputs in the repository root (per lecturer, slugified full name):
+7. Aggregate teaching load (per-class share = `(own meetings / 14) * sks`):
+   ```bash
+   conda run -n simaster simaster analyze --dir data/clean --semester 20261 \
+       --min 8 --max 16 --warn 6 --names target.md --outdir results
+   ```
+8. Expected outputs in the repository root (per lecturer, slugified full name):
    - `jadwal_matin_nuhamunada_s_si_m_sc_20261.csv`
    - `jadwal_matin_nuhamunada_s_si_m_sc_20261.json`
-   and in `results/`: `load_summary.csv`, `load_detail.csv`, `load_report.md`.
+   and in `data/clean/`: `sessions.csv` + clean per-lecturer JSONs; in
+   `results/`: `load_summary.csv`, `load_detail.csv`, `load_report.md`.
 
 ## How session reuse works (the key trick)
 
@@ -157,11 +165,15 @@ Context / rules confirmed with the user:
 
 Formula (confirmed):
 - Credit is counted **per class** (key = `kode` + `kelas`).
-- A class should have **14 meetings** per semester.
+- A class should have **8–14 meetings** per semester (warned when outside this
+  range); the credit denominator is 14.
 - Per-lecturer share of a class = `(meetings taught by that lecturer in the
   class / 14) * sks`. Total load = sum over classes.
-- Flags: `UNDERLOADED < 12 SKS`, `OVERLOADED > 16 SKS` (min 12 / max 16
-  confirmed), otherwise `OK`; `NO_DATA` when no scrape result exists.
+- Status bands (on strict total SKS, `total_sks`): `WARNING < 6`,
+  `UNDERLOADED 6–8`, `OK 8–12` (ideal), `ABOVE 12–16`, `OVERLOADED > 16`.
+  Rationale: the official 12-SKS minimum already includes research, so the
+  ideal teaching-only load is 8–12; 16 is the limit and also covers research,
+  community service and supporting activities. `NO_DATA` when no result exists.
 
 Implemented:
 - Phase 2 — name resolution (`src/simaster/parse.py`):
@@ -177,25 +189,42 @@ Implemented:
   - `find_dosen`/`canonical_name`/`Scraper.resolve_dosen` share it.
 - Phase 3 — `src/simaster/load.py`:
   - `compute_lecturer_load(courses, dosen)` — per class: `class_meetings`,
-    `own_meetings` (folded match against `meta.dosen`), `own_credit`.
+    `own_meetings` (folded match against `meta.dosen`), `own_credit` (strict),
+    `est_credit` (unscheduled classes assumed at full `sks`), `is_s3`.
+  - `is_s3(course)` — DOKTOR BIOLOGI (rumpun `[PRODI] DOKTOR BIOLOGI` or
+    `BIDB*` kode prefix); `est_sks_no_s3` excludes it.
   - `aggregate_loads(directory, semester, min, max, names)` — reads all
     `jadwal_*_<semester>.json`, dedupes by `dosen`, flags classes with
-    meetings != 14, reports `NO_DATA` for expected names without files.
+    outside the 8-14 meeting range, reports `NO_DATA` for expected names
+    without files.
   - CLI subcommand `simaster analyze`; scrape flags unchanged.
-  - Outputs: `load_summary.csv`, `load_detail.csv`, `load_report.md`.
-- Phase 4 — executed (live CDP):
-  1. `conda run -n simaster pytest` (80 offline tests green).
+  - Outputs: `load_summary.csv` (strict + `est_sks` + `est_sks_no_s3` +
+    `n_unscheduled` + `n_s3`), `load_detail.csv`, `load_report.md`.
+- Phase 4 — `src/simaster/clean.py` + `simaster clean`: aggregates all raw
+  CSVs, deletes redundant sessions (9229 raw rows → 2820 unique, each session
+  listed once instead of once per co-teacher file), writes `sessions.csv` and a
+  clean per-lecturer JSON under `data/clean/` (own sessions only, 0-meeting
+  assigned classes kept, meta += `own_entries`, `est_sks`, `est_sks_no_s3`,
+  `n_unscheduled`, `n_s3`). Raw `data/` is never modified.
+- Phase 5 — executed (live CDP):
+  1. `conda run -n simaster pytest` (94 offline tests green).
   2. `simaster --names target.md --outdir data --semester 20261` — 63 of 68
      lecturers written; 5 have no courses in SIMASTER for 20261 (legitimate
      `NO_DATA`): Akbar Reza, Dr. Mirza Hanif Al Falah, Rendi Mahadi, Annas
      Rabbani, Novita Yustinadiar.
-  3. `simaster analyze --dir data --semester 20261 --min 12 --max 16 --names target.md --outdir results`
-  4. Findings below; README + AGENTS.md updated.
+  3. `simaster clean --dir data --semester 20261 --names target.md --outdir data/clean`
+  4. `simaster analyze --dir data/clean --semester 20261 --min 8 --max 16 --warn 6 --names target.md --outdir results`
+  5. Findings below; README + AGENTS.md updated.
 
-20261 findings (from `results/load_report.md`): 55 `UNDERLOADED`, 7 `OK`
-(12.79–16.00 SKS), 1 `OVERLOADED` (Dr. Rury Eprilurahman, 18.21), 5 `NO_DATA`.
-The low totals are driven by real SIMASTER data: ~570 of 1203 classes have **no
-booked meetings** (verified in the rendered DOM — course rows with an empty
-"Jadwal Harian" cell, e.g. thesis/practicum courses), contributing 0 SKS, and
-many scheduled classes have fewer than the 14-meeting baseline (784 warnings).
-Offline verification: `python -m simaster`/`pytest` don't need the browser.
+20261 findings (from `results/load_report.md`), status banded from `total_sks`
+(strict; unscheduled classes contribute 0): 21 `WARNING`, 20 `UNDERLOADED`,
+14 `OK`, 7 `ABOVE`, 1 `OVERLOADED` (Dr. Rury Eprilurahman, 18.21), 5 `NO_DATA`.
+For comparison, the **estimated** metric (`est_sks`; unscheduled at full credit):
+7 `WARNING`, 3 `UNDERLOADED`, 9 `OK`, 8 `ABOVE`, 36 `OVERLOADED`, 5 `NO_DATA`.
+Excluding **S3** (`est_sks_no_s3`): 8 `WARNING`, 9 `UNDERLOADED`, 14 `OK`,
+12 `ABOVE`, 20 `OVERLOADED`, 5 `NO_DATA`. The strict totals are driven by real
+SIMASTER data: ~570 of 1203 classes have no booked meetings (verified in the
+rendered DOM — course rows with an empty "Jadwal Harian" cell, e.g.
+thesis/practicum courses), contributing 0 SKS, and many scheduled classes have
+fewer than the 8–14-meeting expectation (warnings). Offline verification:
+`python -m simaster`/`pytest` don't need the browser.

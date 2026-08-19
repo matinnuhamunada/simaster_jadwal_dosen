@@ -68,23 +68,48 @@ class TestAnalyzeArgs:
         assert args.analyze is True
         assert args.dir == "data"
         assert args.semester == "20261"
-        assert args.min_sks == 12.0
+        assert args.min_sks == 8.0
         assert args.max_sks == 16.0
+        assert args.warn_sks == 6.0
         assert args.names is None
         assert args.outdir == "."
 
     def test_analyze_options(self):
         args = parse_args(
-            ["analyze", "--dir", "results", "--semester", "20251", "--min", "9", "--max", "14"]
+            ["analyze", "--dir", "results", "--semester", "20251", "--min", "9", "--max", "14", "--warn", "5"]
         )
         assert args.dir == "results"
         assert args.semester == "20251"
         assert args.min_sks == 9.0
         assert args.max_sks == 14.0
+        assert args.warn_sks == 5.0
 
     def test_scrape_not_analyze(self):
         args = parse_args(["--lecturer", "A"])
         assert args.analyze is False
+
+
+class TestCleanArgs:
+    def test_clean_dispatch(self):
+        args = parse_args(["clean"])
+        assert args.clean is True
+        assert args.dir == "data"
+        assert args.semester == "20261"
+        assert args.names is None
+        assert args.outdir == "data/clean"
+
+    def test_clean_options(self):
+        args = parse_args(
+            ["clean", "--dir", "data", "--semester", "20251", "--names", "target.md", "--outdir", "x"]
+        )
+        assert args.dir == "data"
+        assert args.semester == "20251"
+        assert args.names == "target.md"
+        assert args.outdir == "x"
+
+    def test_clean_not_scrape(self):
+        args = parse_args(["clean"])
+        assert getattr(args, "analyze", False) is False
 
 
 class TestMainAnalyze:

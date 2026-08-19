@@ -3,9 +3,11 @@ import json
 
 from simaster.load import (
     MEETINGS_PER_SEMESTER,
+    SUMMARY_HEADER,
     aggregate_loads,
     classify,
     compute_lecturer_load,
+    is_s3,
     write_reports,
 )
 
@@ -29,10 +31,20 @@ def _entry(dosen):
 
 class TestClassify:
     def test_bounds(self):
-        assert classify(12.0, 12, 16) == "OK"
-        assert classify(16.0, 12, 16) == "OK"
-        assert classify(11.99, 12, 16) == "UNDERLOADED"
-        assert classify(16.01, 12, 16) == "OVERLOADED"
+        assert classify(5.99, warn=6, ok_min=8, ok_high=12, max_sks=16) == "WARNING"
+        assert classify(6.0, warn=6, ok_min=8, ok_high=12, max_sks=16) == "UNDERLOADED"
+        assert classify(7.99, warn=6, ok_min=8, ok_high=12, max_sks=16) == "UNDERLOADED"
+        assert classify(8.0, warn=6, ok_min=8, ok_high=12, max_sks=16) == "OK"
+        assert classify(12.0, warn=6, ok_min=8, ok_high=12, max_sks=16) == "OK"
+        assert classify(12.01, warn=6, ok_min=8, ok_high=12, max_sks=16) == "ABOVE"
+        assert classify(16.0, warn=6, ok_min=8, ok_high=12, max_sks=16) == "ABOVE"
+        assert classify(16.01, warn=6, ok_min=8, ok_high=12, max_sks=16) == "OVERLOADED"
+
+    def test_defaults(self):
+        assert classify(5.0) == "WARNING"
+        assert classify(9.0) == "OK"
+        assert classify(14.0) == "ABOVE"
+        assert classify(17.0) == "OVERLOADED"
 
 
 class TestComputeLecturerLoad:
@@ -85,7 +97,83 @@ class TestComputeLecturerLoad:
 
     def test_empty_courses(self):
         load = compute_lecturer_load([], "Matin")
-        assert load == {"total_credit": 0.0, "n_classes": 0, "classes": []}
+        assert load == {
+            "total_credit": 0.0,
+            "est_sks": 0.0,
+            "est_sks_no_s3": 0.0,
+            "n_unscheduled": 0,
+            "n_s3": 0,
+            "n_classes": 0,
+            "n_courses": 0,
+            "classes": [],
+        }
+
+    def test_unscheduled_class_assumes_full_sks(self):
+        courses = [
+            {
+                "kode": "K4",
+                "mata_kuliah": "Disertasi",
+                "kelas": "D",
+                "sks": "4.00",
+                "jadwal": [],
+            }
+        ]
+        load = compute_lecturer_load(courses, "Matin Nuhamunada, S.Si., M.Sc.")
+        assert load["est_sks"] == 4.0
+        assert load["total_credit"] == 0.0
+        assert load["n_unscheduled"] == 1
+        assert load["classes"][0]["est_credit"] == 4.0
+
+    def test_s3_excluded_from_no_s3_estimate(self):
+        courses = [
+            {
+                "kode": "BIDB267103",
+                "mata_kuliah": "Pengembangan Proposal",
+                "kelas": "A",
+                "sks": "2.00",
+                "rumpun": "[PRODI] DOKTOR BIOLOGI",
+                "jadwal": [],
+            },
+            {
+                "kode": "BISB262101",
+                "mata_kuliah": "Bahasa Inggris",
+                "kelas": "IUP",
+                "sks": "2.00",
+                "rumpun": "[PRODI] S1 BIOLOGI",
+                "jadwal": [],
+            },
+        ]
+        load = compute_lecturer_load(courses, "Matin Nuhamunada, S.Si., M.Sc.")
+        assert load["est_sks"] == 4.0
+        assert load["est_sks_no_s3"] == 2.0
+        assert load["n_s3"] == 1
+        assert load["classes"][0]["is_s3"] is True
+
+    def test_class_meetings_read_from_field(self):
+        courses = [
+            {
+                "kode": "K5",
+                "mata_kuliah": "MK",
+                "kelas": "E",
+                "sks": "3.00",
+                "class_meetings": 14,
+                "jadwal": [_entry("Matin Nuhamunada, S.Si., M.Sc.")] * 7,
+            }
+        ]
+        load = compute_lecturer_load(courses, "Matin Nuhamunada, S.Si., M.Sc.")
+        assert load["classes"][0]["class_meetings"] == 14
+        assert load["total_credit"] == 1.5
+
+
+class TestIsS3:
+    def test_by_rumpun(self):
+        assert is_s3({"rumpun": "[PRODI] DOKTOR BIOLOGI", "kode": "X"}) is True
+
+    def test_by_kode_prefix(self):
+        assert is_s3({"rumpun": "[PRODI] S1 BIOLOGI", "kode": "BIDB203201"}) is True
+
+    def test_not_s3(self):
+        assert is_s3({"rumpun": "[PRODI] S1 BIOLOGI", "kode": "BISB262101"}) is False
 
 
 def _write_fixture(dirpath, stem, dosen, dosen_id, courses):
@@ -122,9 +210,9 @@ class TestAggregateLoads:
 
         result = aggregate_loads(tmp_path, "20261", 12, 16)
         assert len(result["lecturers"]) == 2
-        assert result["lecturers"][0]["status"] == "UNDERLOADED"  # sorted desc
+        assert result["lecturers"][0]["status"] == "WARNING"  # total 2.0, sorted desc
         assert any(
-            "has 5 meetings" in w and "expected 14" in w for w in result["warnings"]
+            "has 5 meetings" in w and "expected 8-14" in w for w in result["warnings"]
         )
 
     def test_dedupe_by_dosen(self, tmp_path):
@@ -152,7 +240,7 @@ class TestAggregateLoads:
         assert no_data[0]["dosen"] == "Dr. Jane Doe, S.Si."
         present = [r for r in result["lecturers"] if r["status"] != "NO_DATA"]
         assert present[0]["dosen"] == "Matin Nuhamunada, S.Si., M.Sc."
-        assert present[0]["status"] == "UNDERLOADED"
+        assert present[0]["status"] == "WARNING"  # total 2.0 (< 6)
 
     def test_missing_meta_skipped(self, tmp_path):
         p = tmp_path / "jadwal_bad_20261.json"
@@ -175,7 +263,7 @@ class TestWriteReports:
         }
         with (out / "load_summary.csv").open(newline="", encoding="utf-8-sig") as f:
             rows = list(csv.reader(f))
-        assert rows[0] == ["dosen", "dosenId", "total_sks", "n_classes", "status", "source_file"]
+        assert rows[0] == SUMMARY_HEADER
         assert len(rows) == 2
         report = (out / "load_report.md").read_text(encoding="utf-8")
         assert "# Teaching load report" in report

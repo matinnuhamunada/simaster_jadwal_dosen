@@ -98,30 +98,74 @@ If the SIMASTER session has expired, the scraper prints a message and polls for 
 to `--max-login-min` minutes (default 30) while you finish the login manually in
 the open Chrome window, then continues on its own.
 
-### 5. Analyze teaching load
+### 5. Clean the raw schedules
 
-Aggregate the scraped schedules into per-lecturer teaching-load (in SKS) and flag
-under-/over-loaded lecturers:
+The raw files list every class session in each co-teacher's file, so the same
+session appears once per co-teacher. `clean` aggregates all raw CSVs, deletes
+those redundant sessions, and writes a deduplicated per-lecturer dataset into a
+new folder — raw `data/` is never modified:
 
 ```bash
-conda run -n simaster simaster analyze --dir data --semester 20261 \
+conda run -n simaster simaster clean --dir data --semester 20261 \
+    --names target.md --outdir data/clean
+```
+
+Outputs:
+
+- `data/clean/sessions.csv` — the faculty-wide unique session catalog (each
+  session once, ~2820 rows vs ~9200 raw rows).
+- `data/clean/jadwal_<name>_<semester>.json` — per lecturer: own sessions only
+  (co-teacher sessions dropped, within-file duplicates removed), 0-meeting
+  assigned classes kept, and each course annotated with `class_meetings` /
+  `own_meetings`. Meta gains `own_entries` (only the lecturer's own sessions),
+  `est_sks` (scheduled → `own/14*sks`, unscheduled → full `sks`),
+  `est_sks_no_s3` (excludes S3 / DOKTOR BIOLOGI), `n_unscheduled`, `n_s3`.
+
+### 6. Analyze teaching load
+
+Aggregate the cleaned schedules into per-lecturer teaching-load (in SKS) and
+flag under-/over-loaded lecturers:
+
+```bash
+conda run -n simaster simaster analyze --dir data/clean --semester 20261 \
     --min 12 --max 16 --names target.md --outdir results
 ```
 
 Credit is counted **per class** (`kode` + `kelas`): a full class has **14
 meetings** per semester, and a lecturer's share of a class is
 `(meetings they teach / 14) * sks`. Their total load is the sum over all their
-classes. `--min`/`--max` are the acceptable SKS bounds
-(`UNDERLOADED < min`, `OVERLOADED > max`, else `OK`); lecturers in `--names`
-without a scrape result are reported `NO_DATA`.
+classes.
+
+Status is banded from the strict teaching SKS (`total_sks`), defaulting to:
+
+| Band (teaching SKS) | Status |
+| --- | --- |
+| `< 6` | `WARNING` |
+| `6 – 8` | `UNDERLOADED` |
+| `8 – 12` | `OK` (ideal target) |
+| `12 – 16` | `ABOVE` (within limit) |
+| `> 16` | `OVERLOADED` |
+
+The 12-SKS official minimum already includes research, so the ideal teaching
+load is 8–12; 16 is the limit and itself covers research, community service and
+supporting activities. `--warn` / `--min` / `--max` change the band edges;
+lecturers in `--names` without a result are reported `NO_DATA`. Classes with a
+meeting count outside the expected **8–14** range are listed as warnings (e.g.
+courses with no booked meetings, which contribute 0 SKS to the strict total).
 
 Outputs (written to `--outdir`, default `.`):
 
-- `load_summary.csv` — lecturer, total SKS, #classes, status.
-- `load_detail.csv` — one row per class (class meetings, own meetings, own SKS).
-- `load_report.md` — grouped human-readable report, including warnings for any
-  class whose meeting count differs from 14 (e.g. courses with no booked
-  meetings, which contribute 0 SKS).
+- `load_summary.csv` — lecturer, strict total SKS, estimated SKS (`est_sks`,
+  unscheduled classes assumed at full credit), estimated excluding S3
+  (`est_sks_no_s3`), #unscheduled classes, #S3 classes, status.
+- `load_detail.csv` — one row per class (class meetings, own meetings, strict
+  credit, estimated credit, S3 flag).
+- `load_report.md` — grouped human-readable report with the same columns plus
+  warnings for any class whose meeting count differs from 14 (e.g. courses with
+  no booked meetings, which contribute 0 SKS to the strict total).
+
+The `status` flag is banded from `total_sks` (see the table above); estimated
+`est_sks` and `est_sks_no_s3` are reported alongside for comparison.
 
 ### CLI reference
 
@@ -130,8 +174,10 @@ simaster [--lecturer NAME]... [--names FILE]... [--semester SEMESTER]
          [--outdir DIR] [--endpoint URL] [--max-login-min MIN]
          [--verbose] [--version]
 
-simaster analyze --dir DIR --semester SEMESTER [--min MIN] [--max MAX]
-                 [--names FILE] [--outdir DIR]
+simaster analyze --dir DIR --semester SEMESTER [--warn WARN] [--min MIN]
+                 [--max MAX] [--names FILE] [--outdir DIR]
+
+simaster clean --dir DIR --semester SEMESTER --names FILE [--outdir DIR]
 ```
 
 | Flag | Meaning |
@@ -139,12 +185,14 @@ simaster analyze --dir DIR --semester SEMESTER [--min MIN] [--max MAX]
 | `--lecturer NAME` | Lecturer to scrape. Repeatable. |
 | `--names FILE` | Text file with one lecturer name per line. Repeatable. |
 | `--semester` | Semester code (default `20261`). |
-| `--outdir` | Output directory for scrape files / `analyze` reports (default: current directory). |
+| `--outdir` | Output directory for scrape files / `clean` / `analyze` reports (default `.`, `data/clean`, `.` respectively). |
 | `--endpoint` | CDP base URL, e.g. `http://172.31.160.1:9223` (default: auto-discovered WSL gateway). |
 | `--max-login-min` | Minutes to wait for a manual login (default `30`). |
 | `--verbose` | Print the full `list_dosen` responses. |
-| `analyze --dir` | Directory holding `jadwal_*.json` scrape results. |
-| `analyze --min` / `--max` | Under-/over-load SKS bounds (default `12` / `16`). |
+| `analyze --dir` | Directory holding `jadwal_*.json` results (use `data/clean/` for the clean dataset). |
+| `analyze --min` | Lower edge of the ideal OK band (default `8`). |
+| `analyze --max` | Overload limit (default `16`). |
+| `analyze --warn` | Below this teaching SKS is a WARNING (default `6`). |
 
 Provide at least one `--lecturer` or `--names`. Names are deduplicated, and all
 lecturers share one Chrome session. Per-lecturer failures (e.g. an unresolvable
