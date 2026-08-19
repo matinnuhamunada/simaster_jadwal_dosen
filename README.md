@@ -34,12 +34,29 @@ Nuhamunada*) this yields **15 courses / 153 schedule entries**.
 
 ## Steps
 
-### 1. Close every Chrome window on Windows
+
+### Clone the repository and create the environment
+First, clone the repository
+
+```bash
+git clone https://github.com/matinnuhamunada/simaster_jadwal_dosen.git.
+cd simaster_jadwal_dosen
+```
+
+Then, create a `.env` file in the project root with your Windows username:
+
+```env
+WIN_USER="your_windows_username"
+```
+
+This is used by `setup.sh` to locate your Chrome profile. The default is `asus` if not set.
+
+### Close every Chrome window on Windows
 
 The profile files (`Local State`, `Network/Cookies`) can only be copied when Chrome
 is not holding them. Close **all** Chrome windows first.
 
-### 2. Provision the conda environment (once)
+### Provision the conda environment (once)
 
 ```bash
 conda env create -f environment.yml
@@ -52,7 +69,7 @@ so **no browser download is needed**.
 > To pick up package changes after a `git pull`, re-run `conda env update -f
 > environment.yml` (the editable install tracks the source automatically).
 
-### 3. Run the setup script
+### Run the setup script
 
 ```bash
 bash setup.sh
@@ -73,7 +90,7 @@ Why a copied profile? Chrome 136+ disables remote debugging for the **default**
 user-data dir. The copy keeps the session cookies while giving Chrome a dedicated,
 debriefable user-data dir.
 
-### 4. Run the scraper
+### Run the scraper
 
 Single lecturer:
 
@@ -98,7 +115,7 @@ If the SIMASTER session has expired, the scraper prints a message and polls for 
 to `--max-login-min` minutes (default 30) while you finish the login manually in
 the open Chrome window, then continues on its own.
 
-### 5. Clean the raw schedules
+### Clean the raw schedules
 
 The raw files list every class session in each co-teacher's file, so the same
 session appears once per co-teacher. `clean` aggregates all raw CSVs, deletes
@@ -121,7 +138,7 @@ Outputs:
   `est_sks` (scheduled → `own/14*sks`, unscheduled → full `sks`),
   `est_sks_no_s3` (excludes S3 / DOKTOR BIOLOGI), `n_unscheduled`, `n_s3`.
 
-### 6. Analyze teaching load
+### Analyze teaching load
 
 Aggregate the cleaned schedules into per-lecturer teaching-load (in SKS) and
 flag under-/over-loaded lecturers:
