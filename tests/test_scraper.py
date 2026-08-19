@@ -38,12 +38,18 @@ class FakeLocator:
 
 
 class FakePage:
-    def __init__(self, pages=None, resolve_payload=None, login=False):
+    def __init__(self, pages=None, resolve_payload=None, login=False, selector_error=None):
         self.pages = pages or {}
         self.resolve_payload = resolve_payload or []
         self.login = login
+        self.selector_error = selector_error
         self.url = ""
         self.submit_args = None
+
+    def _payload_for(self, term):
+        if isinstance(self.resolve_payload, dict):
+            return self.resolve_payload.get(term, [])
+        return self.resolve_payload
 
     def goto(self, url, **kw):
         self.url = url
@@ -55,7 +61,7 @@ class FakePage:
         if js is PAGINATION_JS:
             return self.pages.get(self.url, {}).get("hrefs", [])
         if js is RESOLVE_JS:
-            return {"status": 200, "text": json.dumps(self.resolve_payload)}
+            return {"status": 200, "text": json.dumps(self._payload_for(arg))}
         if js is SUBMIT_JS:
             self.submit_args = arg
             self.url = RESULT_URL
@@ -69,6 +75,8 @@ class FakePage:
         return None
 
     def wait_for_selector(self, sel, **kw):
+        if self.selector_error and sel in self.selector_error:
+            raise TimeoutError(f"wait_for_selector timeout: {sel}")
         return None
 
     def locator(self, sel):
@@ -121,11 +129,67 @@ def test_scrape_paginates_and_uses_canonical_name():
     }
 
 
+def test_scrape_single_page_no_pagination():
+    pages = {
+        RESULT_URL: {"rows": COURSE_A, "hrefs": [], "total": None},
+    }
+    page = FakePage(pages=pages, resolve_payload=PAYLOAD)
+    sc = make_scraper(page)
+    result = sc.scrape("Matin Nuhamunada")
+    assert len(result["courses"]) == 1
+    assert result["total"] is None
+
+
+def test_submit_filter_tolerates_missing_result_table():
+    pages = {
+        RESULT_URL: {"rows": [], "hrefs": [], "total": None},
+    }
+    page = FakePage(
+        pages=pages,
+        resolve_payload=PAYLOAD,
+        selector_error="table.table.table-striped.table-bordered.table-hover, ul.pagination",
+    )
+    sc = make_scraper(page)
+    result = sc.scrape("Matin Nuhamunada")
+    assert result["courses"] == []
+
+
 def test_scrape_unresolvable_raises_lookup_error():
     page = FakePage(resolve_payload=[{"dosenId": "999", "dosenNama": "Someone Else"}])
     sc = make_scraper(page)
     with pytest.raises(LookupError, match="could not resolve dosenId"):
         sc.scrape("Matin Nuhamunada")
+
+
+def test_resolve_falls_back_to_stripped_title_term():
+    payloads = {
+        "Dr.Utaminingsih": [],
+        "Utaminingsih": [{"dosenId": "13126", "dosenNama": "Dr. Utaminingsih, S.Si., M.Sc."}],
+    }
+    page = FakePage(resolve_payload=payloads)
+    sc = make_scraper(page)
+    assert sc.resolve_dosen(page, "Dr.Utaminingsih S.Si., M.Sc.") == (
+        "13126",
+        "Dr. Utaminingsih, S.Si., M.Sc.",
+    )
+
+
+def test_resolve_uses_given_name_not_broad_title_term():
+    payloads = {
+        "Dr.": [{"dosenId": "5995", "dosenNama": "Dr. Ardaning Nuriliani, S.Si., M.Kes."}],
+        "Dila Hening": [
+            {"dosenId": "16011", "dosenNama": "Dila Hening Windyaraini, S.Si., M.Sc."}
+        ],
+        "Dila": [
+            {"dosenId": "16011", "dosenNama": "Dila Hening Windyaraini, S.Si., M.Sc."}
+        ],
+    }
+    page = FakePage(resolve_payload=payloads)
+    sc = make_scraper(page)
+    assert sc.resolve_dosen(page, "Dr. Dila Hening Windyarini, S.Si., M.Sc.") == (
+        "16011",
+        "Dila Hening Windyaraini, S.Si., M.Sc.",
+    )
 
 
 def test_scrape_many_continues_past_failure(capsys):

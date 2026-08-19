@@ -68,9 +68,15 @@ in the attached browser.
    conda run -n simaster simaster --names target.md
    ```
    `python -m simaster ...` and the legacy `python -u scrape.py` shim also work.
-6. Expected outputs in the repository root (per lecturer, slugified full name):
+6. Aggregate teaching load (per-class share = `(own meetings / 14) * sks`):
+   ```bash
+   conda run -n simaster simaster analyze --dir data --semester 20261 \
+       --min 12 --max 16 --names target.md --outdir results
+   ```
+7. Expected outputs in the repository root (per lecturer, slugified full name):
    - `jadwal_matin_nuhamunada_s_si_m_sc_20261.csv`
    - `jadwal_matin_nuhamunada_s_si_m_sc_20261.json`
+   and in `results/`: `load_summary.csv`, `load_detail.csv`, `load_report.md`.
 
 ## How session reuse works (the key trick)
 
@@ -135,3 +141,61 @@ in the attached browser.
 - Schedule `waktu` format is `Day DD-MM-YYYY HH:MM-HH:MM`; normalize the date to ISO
   (`YYYY-MM-DD`) in output.
 - `conda run` does not forward stdin to `python`; pass code via `-c` or a script file.
+
+## Teaching-load audit (done, semester 20261)
+
+Context / rules confirmed with the user:
+- `target.md` now holds all ~68 lecturer names scraped from
+  https://biologi.ugm.ac.id/tenaga-pendidik/ (grouped by lab as `#` comments).
+- The academic titles on that page are **not synchronized** with SIMASTER
+  (e.g. page `Dr. Luthfi Nurhidayat, S.Si., M.Sc.` vs SIMASTER
+  `Luthfi Nurhidayat, S.Si., M.Sc.`; page `Ganies Riza A., ...` vs
+  `Ganies Riza Aristya, ...`). **Always resolve to the SIMASTER canonical
+  `dosenId`/`dosenNama`**; never trust the page titles verbatim.
+- `Ridwan Wicaksono, S.T., M.Eng., Ph.D.` was dropped from the old list — no
+  longer listed on the tenaga-pendidik page.
+
+Formula (confirmed):
+- Credit is counted **per class** (key = `kode` + `kelas`).
+- A class should have **14 meetings** per semester.
+- Per-lecturer share of a class = `(meetings taught by that lecturer in the
+  class / 14) * sks`. Total load = sum over classes.
+- Flags: `UNDERLOADED < 12 SKS`, `OVERLOADED > 16 SKS` (min 12 / max 16
+  confirmed), otherwise `OK`; `NO_DATA` when no scrape result exists.
+
+Implemented:
+- Phase 2 — name resolution (`src/simaster/parse.py`):
+  - `best_match(data, lecturer)` — exact-substring fast path, then fuzzy
+    `difflib.SequenceMatcher` (threshold `FUZZY_THRESHOLD = 0.6`).
+  - `term_candidates(lecturer)` — **skips leading academic titles** when
+    choosing the `list_dosen` autocomplete term. A bare `Dr.`/`Prof.` term can
+    return thousands of candidates that exclude the target (whose SIMASTER name
+    often drops the title) and fuzzy-match a wrong title-holder. It tries
+    `"Given Next"` then `"Given"`, with a title-stripped fallback for glued
+    forms like `Dr.Utaminingsih`. This fixed 4 mis-resolutions in the 20261 run
+    (Dila Hening→Ardaning, Nur Indah→Arima, Luthfi→Shidiq, Atikah→Fikri).
+  - `find_dosen`/`canonical_name`/`Scraper.resolve_dosen` share it.
+- Phase 3 — `src/simaster/load.py`:
+  - `compute_lecturer_load(courses, dosen)` — per class: `class_meetings`,
+    `own_meetings` (folded match against `meta.dosen`), `own_credit`.
+  - `aggregate_loads(directory, semester, min, max, names)` — reads all
+    `jadwal_*_<semester>.json`, dedupes by `dosen`, flags classes with
+    meetings != 14, reports `NO_DATA` for expected names without files.
+  - CLI subcommand `simaster analyze`; scrape flags unchanged.
+  - Outputs: `load_summary.csv`, `load_detail.csv`, `load_report.md`.
+- Phase 4 — executed (live CDP):
+  1. `conda run -n simaster pytest` (80 offline tests green).
+  2. `simaster --names target.md --outdir data --semester 20261` — 63 of 68
+     lecturers written; 5 have no courses in SIMASTER for 20261 (legitimate
+     `NO_DATA`): Akbar Reza, Dr. Mirza Hanif Al Falah, Rendi Mahadi, Annas
+     Rabbani, Novita Yustinadiar.
+  3. `simaster analyze --dir data --semester 20261 --min 12 --max 16 --names target.md --outdir results`
+  4. Findings below; README + AGENTS.md updated.
+
+20261 findings (from `results/load_report.md`): 55 `UNDERLOADED`, 7 `OK`
+(12.79–16.00 SKS), 1 `OVERLOADED` (Dr. Rury Eprilurahman, 18.21), 5 `NO_DATA`.
+The low totals are driven by real SIMASTER data: ~570 of 1203 classes have **no
+booked meetings** (verified in the rendered DOM — course rows with an empty
+"Jadwal Harian" cell, e.g. thesis/practicum courses), contributing 0 SKS, and
+many scheduled classes have fewer than the 14-meeting baseline (784 warnings).
+Offline verification: `python -m simaster`/`pytest` don't need the browser.

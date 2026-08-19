@@ -10,7 +10,8 @@ of automating that flow, this project **reuses the session cookies** from the Ch
 profile that already holds a SIMASTER login. No credentials are ever asked for.
 
 It is organized as an installable Python package (`simaster`) with a CLI, and
-supports both single-lecturer and batch scraping (from a text file of names).
+supports both single-lecturer and batch scraping (from a text file of names),
+plus a teaching-load audit command (`simaster analyze`).
 
 ## Outputs
 
@@ -97,12 +98,40 @@ If the SIMASTER session has expired, the scraper prints a message and polls for 
 to `--max-login-min` minutes (default 30) while you finish the login manually in
 the open Chrome window, then continues on its own.
 
+### 5. Analyze teaching load
+
+Aggregate the scraped schedules into per-lecturer teaching-load (in SKS) and flag
+under-/over-loaded lecturers:
+
+```bash
+conda run -n simaster simaster analyze --dir data --semester 20261 \
+    --min 12 --max 16 --names target.md --outdir results
+```
+
+Credit is counted **per class** (`kode` + `kelas`): a full class has **14
+meetings** per semester, and a lecturer's share of a class is
+`(meetings they teach / 14) * sks`. Their total load is the sum over all their
+classes. `--min`/`--max` are the acceptable SKS bounds
+(`UNDERLOADED < min`, `OVERLOADED > max`, else `OK`); lecturers in `--names`
+without a scrape result are reported `NO_DATA`.
+
+Outputs (written to `--outdir`, default `.`):
+
+- `load_summary.csv` — lecturer, total SKS, #classes, status.
+- `load_detail.csv` — one row per class (class meetings, own meetings, own SKS).
+- `load_report.md` — grouped human-readable report, including warnings for any
+  class whose meeting count differs from 14 (e.g. courses with no booked
+  meetings, which contribute 0 SKS).
+
 ### CLI reference
 
 ```
 simaster [--lecturer NAME]... [--names FILE]... [--semester SEMESTER]
          [--outdir DIR] [--endpoint URL] [--max-login-min MIN]
          [--verbose] [--version]
+
+simaster analyze --dir DIR --semester SEMESTER [--min MIN] [--max MAX]
+                 [--names FILE] [--outdir DIR]
 ```
 
 | Flag | Meaning |
@@ -110,10 +139,12 @@ simaster [--lecturer NAME]... [--names FILE]... [--semester SEMESTER]
 | `--lecturer NAME` | Lecturer to scrape. Repeatable. |
 | `--names FILE` | Text file with one lecturer name per line. Repeatable. |
 | `--semester` | Semester code (default `20261`). |
-| `--outdir` | Output directory (default: current directory). |
+| `--outdir` | Output directory for scrape files / `analyze` reports (default: current directory). |
 | `--endpoint` | CDP base URL, e.g. `http://172.31.160.1:9223` (default: auto-discovered WSL gateway). |
 | `--max-login-min` | Minutes to wait for a manual login (default `30`). |
 | `--verbose` | Print the full `list_dosen` responses. |
+| `analyze --dir` | Directory holding `jadwal_*.json` scrape results. |
+| `analyze --min` / `--max` | Under-/over-load SKS bounds (default `12` / `16`). |
 
 Provide at least one `--lecturer` or `--names`. Names are deduplicated, and all
 lecturers share one Chrome session. Per-lecturer failures (e.g. an unresolvable

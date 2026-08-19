@@ -1,6 +1,7 @@
 import pytest
 
 from simaster.parse import (
+    best_match,
     canonical_name,
     current_offset,
     find_dosen,
@@ -8,6 +9,7 @@ from simaster.parse import (
     parse_schedule_waktu,
     parse_table_rows,
     slugify,
+    term_candidates,
 )
 
 
@@ -108,6 +110,80 @@ class TestFindDosen:
 
     def test_falls_back_to_other_keys(self):
         assert find_dosen([{"label": "Jane Doe", "id": "9"}], "Jane Doe") == "9"
+
+
+class TestBestMatch:
+    def test_exact_substring_fast_path(self):
+        item = best_match(LIST_PAYLOAD, "Matin Nuhamunada")
+        assert item["dosenId"] == "16764"
+
+    def test_title_prefix_diff_fuzzy(self):
+        payload = [{"dosenId": "55", "dosenNama": "Luthfi Nurhidayat, S.Si., M.Sc."}]
+        assert best_match(payload, "Dr. Luthfi Nurhidayat, S.Si., M.Sc.")["dosenId"] == "55"
+
+    def test_extra_credential_fuzzy(self):
+        payload = [{"dosenId": "66", "dosenNama": "Matin Nuhamunada, S.Si., M.Sc."}]
+        assert best_match(payload, "Matin Nuhamunada, S.Si., M.Sc., Ph.D.")["dosenId"] == "66"
+
+    def test_missing_credential_fuzzy(self):
+        payload = [{"dosenId": "77", "dosenNama": "Eko Agus Suyono, S.Si., M.App.Sc."}]
+        assert best_match(payload, "Prof. Dr. Eko Agus Suyono, M.App.Sc.")["dosenId"] == "77"
+
+    def test_initial_vs_full_middle_name_fuzzy(self):
+        payload = [{"dosenId": "88", "dosenNama": "Ganies Riza Aristya, S.Si., M.Sc., Ph.D."}]
+        assert best_match(payload, "Ganies Riza A., S.Si., M.Sc., Ph.D.")["dosenId"] == "88"
+
+    def test_dra_vs_dr_fuzzy(self):
+        payload = [{"dosenId": "99", "dosenNama": "Rarastoeti Pratiwi, M.Sc., Ph.D."}]
+        assert best_match(payload, "Prof. Dra. Rarastoeti Pratiwi, M.Sc., Ph.D.")["dosenId"] == "99"
+
+    def test_unknown_returns_none(self):
+        payload = [{"dosenId": "1", "dosenNama": "Someone Else, S.Si."}]
+        assert best_match(payload, "Matin Nuhamunada") is None
+
+    def test_empty_lecturer(self):
+        assert best_match(LIST_PAYLOAD, "") is None
+
+    def test_not_a_list(self):
+        assert best_match({"error": "x"}, "Matin") is None
+
+
+class TestTermCandidates:
+    def test_plain_name(self):
+        assert term_candidates("Matin Nuhamunada") == ["Matin Nuhamunada", "Matin"]
+
+    def test_titled_name_skips_titles(self):
+        assert term_candidates("Prof. Dr. Eko Agus Suyono, M.App.Sc.") == [
+            "Eko Agus",
+            "Eko",
+        ]
+
+    def test_title_fragments_skipped(self):
+        assert term_candidates("Dr. rer. nat. Abdul Rahman Siregar, S.Si., M.Biotech.") == [
+            "Abdul Rahman",
+            "Abdul",
+        ]
+
+    def test_titled_name_with_initial_skips_two_word(self):
+        assert term_candidates("Prof. Dr. Budi S. Daryono, M.Agr.Sc.") == ["Budi"]
+
+    def test_single_given_name(self):
+        assert term_candidates("Sukirno, S.Si., M.Sc., Ph.D.") == ["Sukirno"]
+
+    def test_glued_title_adds_fallback(self):
+        assert term_candidates("Dr.Utaminingsih S.Si., M.Sc.") == [
+            "Dr.Utaminingsih",
+            "Utaminingsih",
+        ]
+
+    def test_glued_prof(self):
+        assert term_candidates("Prof.Rina Sri Kasiamdari, S.Si., Ph.D.") == [
+            "Prof.Rina",
+            "Rina",
+        ]
+
+    def test_empty(self):
+        assert term_candidates("") == []
 
 
 class TestCanonicalName:

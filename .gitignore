@@ -9,3 +9,4 @@ dist/
 jadwal_*.csv
 jadwal_*.json
 data/
+results/

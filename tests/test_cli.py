@@ -1,3 +1,5 @@
+import json
+
 import pytest
 
 from simaster.cli import _dedupe, main, parse_args, run_all
@@ -58,6 +60,60 @@ class TestMain:
 
     def test_dedupe_preserves_order(self):
         assert _dedupe(["a", "b", "a", "c"]) == ["a", "b", "c"]
+
+
+class TestAnalyzeArgs:
+    def test_analyze_dispatch(self):
+        args = parse_args(["analyze"])
+        assert args.analyze is True
+        assert args.dir == "data"
+        assert args.semester == "20261"
+        assert args.min_sks == 12.0
+        assert args.max_sks == 16.0
+        assert args.names is None
+        assert args.outdir == "."
+
+    def test_analyze_options(self):
+        args = parse_args(
+            ["analyze", "--dir", "results", "--semester", "20251", "--min", "9", "--max", "14"]
+        )
+        assert args.dir == "results"
+        assert args.semester == "20251"
+        assert args.min_sks == 9.0
+        assert args.max_sks == 14.0
+
+    def test_scrape_not_analyze(self):
+        args = parse_args(["--lecturer", "A"])
+        assert args.analyze is False
+
+
+class TestMainAnalyze:
+    def test_runs_analyze_offline(self, tmp_path, capsys):
+        course = {
+            "kode": "K1",
+            "mata_kuliah": "Genetika",
+            "kelas": "A",
+            "sks": "2.00",
+            "jadwal": [{"dosen": "Matin Nuhamunada, S.Si., M.Sc."}] * 14,
+        }
+        (tmp_path / "jadwal_matin_nuhamunada_s_si_m_sc_20261.json").write_text(
+            json.dumps(
+                {
+                    "meta": {
+                        "semester": "20261",
+                        "dosen": "Matin Nuhamunada, S.Si., M.Sc.",
+                        "dosenId": "16764",
+                    },
+                    "courses": [course],
+                }
+            ),
+            encoding="utf-8",
+        )
+        out = tmp_path / "out"
+        rc = main(["analyze", "--dir", str(tmp_path), "--semester", "20261", "--outdir", str(out)])
+        assert rc == 0
+        assert (out / "load_summary.csv").exists()
+        assert "wrote" in capsys.readouterr().out
 
 
 class FakeScraper:

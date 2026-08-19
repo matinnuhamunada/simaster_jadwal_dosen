@@ -17,11 +17,13 @@ from datetime import datetime
 from playwright.sync_api import Page, sync_playwright
 
 from .parse import (
-    canonical_name,
+    _item_id,
+    _item_name,
+    best_match,
     current_offset,
-    find_dosen,
     parse_schedule_waktu,
     parse_table_rows,
+    term_candidates,
 )
 
 SEMESTER = "20261"
@@ -144,20 +146,23 @@ class Scraper:
 
     def resolve_dosen(self, page: Page, lecturer: str) -> tuple[str, str]:
         """Resolve dosenId + canonical name via the list_dosen autocomplete."""
-        term = lecturer.split(" ")[0]
-        print(f"[scrape] resolving dosenId via list_dosen?term={term}")
-        raw = page.evaluate(RESOLVE_JS, term)
-        body = raw["text"] if self.verbose else raw["text"][:300]
-        print(f"[scrape] list_dosen status={raw['status']} body={body}")
-        data = (
-            json.loads(raw["text"]) if raw["status"] == 200 and raw["text"].strip() else []
-        )
-        dosen_id = find_dosen(data, lecturer)
-        if not dosen_id:
-            raise LookupError(f"could not resolve dosenId for '{lecturer}'")
-        name = canonical_name(data, lecturer) or lecturer
-        print(f"[scrape] dosenId={dosen_id} canonical='{name}'")
-        return dosen_id, name
+        for term in term_candidates(lecturer):
+            print(f"[scrape] resolving dosenId via list_dosen?term={term}")
+            raw = page.evaluate(RESOLVE_JS, term)
+            body = raw["text"] if self.verbose else raw["text"][:300]
+            print(f"[scrape] list_dosen status={raw['status']} body={body}")
+            data = (
+                json.loads(raw["text"])
+                if raw["status"] == 200 and raw["text"].strip()
+                else []
+            )
+            item = best_match(data, lecturer)
+            if item:
+                dosen_id = _item_id(item)
+                name = _item_name(item) or lecturer
+                print(f"[scrape] dosenId={dosen_id} canonical='{name}'")
+                return dosen_id, name
+        raise LookupError(f"could not resolve dosenId for '{lecturer}'")
 
     def submit_filter(self, page: Page, dosen_id: str, lecturer: str):
         """Fill the hidden form and POST to view_jadwal_mengajar."""
@@ -167,7 +172,14 @@ class Scraper:
                 {"sesi": self.semester, "dosenId": dosen_id, "dosen": lecturer},
             )
         page.wait_for_load_state("domcontentloaded")
-        page.wait_for_selector("ul.pagination", timeout=30000)
+        try:
+            page.wait_for_selector(
+                "table.table.table-striped.table-bordered.table-hover, ul.pagination",
+                state="attached",
+                timeout=30000,
+            )
+        except TimeoutError:
+            print("[scrape] no result table or pagination found; assuming empty result.")
         time.sleep(1)
 
     # -- scraping --------------------------------------------------------
