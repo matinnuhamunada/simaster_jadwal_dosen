@@ -94,6 +94,3 @@ Dr. Maryani, M.Sc.
 Dr.Utaminingsih S.Si., M.Sc.
 Novita Yustinadiar S.Si., M.Si.
 Dr. Wiko Arif Wibowo, S.Si.
-
-# Note: Ridwan Wicaksono, S.T., M.Eng., Ph.D. was in the previous list but is no
-# longer listed on the tenaga-pendidik page.
