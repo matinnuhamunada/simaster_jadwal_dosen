@@ -10,7 +10,7 @@ from .batch import read_lecturers
 from .clean import clean_all
 from .dashboard import write_dashboard
 from .load import aggregate_loads, write_reports
-from .output import write_outputs
+from .output import verify_lecturer_output, write_outputs
 from .scraper import Scraper, SEMESTER, build_meta
 
 
@@ -52,6 +52,13 @@ def _scrape_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--verbose", action="store_true", help="print the full list_dosen responses."
+    )
+    parser.add_argument(
+        "--from-scratch",
+        action="store_true",
+        help="ignore any existing output files and re-scrape every lecturer "
+        "(default: verify existing outputs and only scrape what's missing/incomplete, "
+        "so an interrupted run can resume where it left off).",
     )
     parser.add_argument(
         "--version", action="version", version=f"%(prog)s {__version__}"
@@ -208,34 +215,66 @@ def run_all(
     endpoint: str | None,
     max_login_min: int,
     verbose: bool,
+    from_scratch: bool = False,
     scraper_factory=Scraper,
 ) -> tuple[list, int]:
-    """Scrape all names in one browser session; return (written_paths, failures)."""
+    """Scrape names one at a time, writing each lecturer's output as soon as it's done.
+
+    Unless ``from_scratch``, lecturers with an existing, integrity-verified
+    output are skipped first, so a run interrupted by a dropped connection
+    can simply be re-run to resume from the last successfully scraped
+    lecturer instead of starting over. Return (written_paths, failures).
+    """
     written: list = []
     failures = 0
+
+    todo = names
+    if not from_scratch:
+        todo = []
+        for name in names:
+            if verify_lecturer_output(name, semester, outdir):
+                print(f"[scrape] skip '{name}': existing output verified intact.")
+            else:
+                todo.append(name)
+    if not todo:
+        return written, failures
+
     with scraper_factory(
         endpoint=endpoint, semester=semester, max_login_min=max_login_min, verbose=verbose
     ) as sc:
         if verbose:
             print(f"[scrape] endpoint: {sc.endpoint}")
-        results = sc.scrape_many(names)
+        for name in todo:
+            try:
+                result = sc.scrape(name)
+            except (LookupError, RuntimeError) as exc:
+                print(f"[scrape] ERROR for '{name}': {exc}")
+                failures += 1
+                continue
+            except Exception as exc:  # e.g. a dropped connection mid-scrape
+                print(f"[scrape] FATAL error for '{name}': {exc}")
+                print(
+                    "[scrape] stopping this run; lecturers already written are safe. "
+                    "Re-run the same command to resume from here."
+                )
+                failures += 1
+                break
 
-    for result in results:
-        if result.get("error"):
-            print(f"[scrape] ERROR for '{result['lecturer']}': {result['error']}")
-            failures += 1
-            continue
-        if not result["courses"]:
-            print(f"[scrape] no courses extracted for '{result['lecturer']}'.")
-            failures += 1
-            continue
-        meta = build_meta(result, semester)
-        print(f"[scrape] {meta}")
-        json_path, csv_path = write_outputs(
-            result["lecturer"], semester, meta, result["courses"], outdir
-        )
-        written.append((json_path, csv_path))
-        print(f"[scrape] wrote {json_path} and {csv_path}")
+            if result.get("error"):
+                print(f"[scrape] ERROR for '{result['lecturer']}': {result['error']}")
+                failures += 1
+                continue
+            if not result["courses"]:
+                print(f"[scrape] no courses extracted for '{result['lecturer']}'.")
+                failures += 1
+                continue
+            meta = build_meta(result, semester)
+            print(f"[scrape] {meta}")
+            json_path, csv_path = write_outputs(
+                result["lecturer"], semester, meta, result["courses"], outdir
+            )
+            written.append((json_path, csv_path))
+            print(f"[scrape] wrote {json_path} and {csv_path}")
     return written, failures
 
 
@@ -318,5 +357,6 @@ def main(argv=None) -> int:
         endpoint=args.endpoint,
         max_login_min=args.max_login_min,
         verbose=args.verbose,
+        from_scratch=args.from_scratch,
     )
     return 1 if failures else 0

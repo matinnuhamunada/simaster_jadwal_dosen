@@ -3,6 +3,8 @@ import json
 import pytest
 
 from simaster.cli import _dedupe, main, parse_args, run_all
+from simaster.output import write_outputs
+from simaster.scraper import build_meta
 
 
 class TestParseArgs:
@@ -15,6 +17,7 @@ class TestParseArgs:
         assert args.verbose is False
         assert args.lecturer == ["Matin Nuhamunada"]
         assert args.names == []
+        assert args.from_scratch is False
 
     def test_repeatable_lecturer(self):
         args = parse_args(["--lecturer", "A", "--lecturer", "B"])
@@ -45,6 +48,10 @@ class TestParseArgs:
         assert args.endpoint == "http://10.0.0.1:9223"
         assert args.max_login_min == 5
         assert args.verbose is True
+
+    def test_from_scratch_flag(self):
+        args = parse_args(["--lecturer", "A", "--from-scratch"])
+        assert args.from_scratch is True
 
     def test_version(self, capsys):
         with pytest.raises(SystemExit) as e:
@@ -219,8 +226,9 @@ class TestMainDashboard:
 class FakeScraper:
     def __init__(self, **kwargs):
         self.endpoint = kwargs.get("endpoint") or "http://fake:9223"
-        self.results = kwargs.pop("results", [])
+        self.results = list(kwargs.pop("results", []))
         self.kwargs = kwargs
+        self.names: list[str] = []
 
     def __enter__(self):
         return self
@@ -228,9 +236,12 @@ class FakeScraper:
     def __exit__(self, *exc):
         return False
 
-    def scrape_many(self, names):
-        self.names = names
-        return self.results
+    def scrape(self, name):
+        self.names.append(name)
+        result = self.results.pop(0)
+        if isinstance(result, Exception):
+            raise result
+        return result
 
 
 @pytest.fixture
@@ -306,3 +317,115 @@ def test_run_all_no_courses_counts_failure(tmp_path):
     )
     assert failures == 1
     assert written == []
+
+
+class TestRunAllResume:
+    def test_skips_lecturer_with_verified_output(self, tmp_path, ok_result, capsys):
+        write_outputs(
+            "Matin Nuhamunada",
+            "20261",
+            build_meta(ok_result, "20261"),
+            ok_result["courses"],
+            tmp_path,
+        )
+        scraper = FakeScraper(results=[])
+        written, failures = run_all(
+            ["Matin Nuhamunada"],
+            semester="20261",
+            outdir=str(tmp_path),
+            endpoint=None,
+            max_login_min=30,
+            verbose=False,
+            scraper_factory=lambda **kw: scraper,
+        )
+        assert failures == 0
+        assert written == []
+        assert scraper.names == []  # never scraped: skipped as already-verified
+        assert "skip" in capsys.readouterr().out
+
+    def test_rescrapes_missing_and_leaves_verified_alone(self, tmp_path, ok_result):
+        write_outputs(
+            "Matin Nuhamunada",
+            "20261",
+            build_meta(ok_result, "20261"),
+            ok_result["courses"],
+            tmp_path,
+        )
+        second = {**ok_result, "lecturer": "Second Person", "canonical": "Second Person"}
+        scraper = FakeScraper(results=[second])
+        written, failures = run_all(
+            ["Matin Nuhamunada", "Second Person"],
+            semester="20261",
+            outdir=str(tmp_path),
+            endpoint=None,
+            max_login_min=30,
+            verbose=False,
+            scraper_factory=lambda **kw: scraper,
+        )
+        assert failures == 0
+        assert len(written) == 1
+        assert scraper.names == ["Second Person"]
+
+    def test_from_scratch_rescrapes_everything(self, tmp_path, ok_result):
+        write_outputs(
+            "Matin Nuhamunada",
+            "20261",
+            build_meta(ok_result, "20261"),
+            ok_result["courses"],
+            tmp_path,
+        )
+        scraper = FakeScraper(results=[ok_result])
+        written, failures = run_all(
+            ["Matin Nuhamunada"],
+            semester="20261",
+            outdir=str(tmp_path),
+            endpoint=None,
+            max_login_min=30,
+            verbose=False,
+            from_scratch=True,
+            scraper_factory=lambda **kw: scraper,
+        )
+        assert failures == 0
+        assert len(written) == 1
+        assert scraper.names == ["Matin Nuhamunada"]
+
+    def test_corrupt_output_is_rescraped(self, tmp_path, ok_result):
+        json_path, csv_path = write_outputs(
+            "Matin Nuhamunada",
+            "20261",
+            build_meta(ok_result, "20261"),
+            ok_result["courses"],
+            tmp_path,
+        )
+        # Truncate to simulate a run cut off mid-write.
+        json_path.write_text('{"meta": {"semester": "20261"', encoding="utf-8")
+        scraper = FakeScraper(results=[ok_result])
+        written, failures = run_all(
+            ["Matin Nuhamunada"],
+            semester="20261",
+            outdir=str(tmp_path),
+            endpoint=None,
+            max_login_min=30,
+            verbose=False,
+            scraper_factory=lambda **kw: scraper,
+        )
+        assert failures == 0
+        assert scraper.names == ["Matin Nuhamunada"]
+
+    def test_fatal_error_stops_batch_but_keeps_progress(self, tmp_path, ok_result):
+        second = {**ok_result, "lecturer": "Second Person", "canonical": "Second Person"}
+        scraper = FakeScraper(results=[ok_result, ConnectionError("net down"), second])
+        written, failures = run_all(
+            ["Matin Nuhamunada", "Broken Person", "Second Person"],
+            semester="20261",
+            outdir=str(tmp_path),
+            endpoint=None,
+            max_login_min=30,
+            verbose=False,
+            scraper_factory=lambda **kw: scraper,
+        )
+        assert failures == 1
+        assert len(written) == 1
+        # third lecturer never attempted: the loop stopped at the fatal error
+        assert scraper.names == ["Matin Nuhamunada", "Broken Person"]
+        assert (tmp_path / "jadwal_matin_nuhamunada_20261.json").exists()

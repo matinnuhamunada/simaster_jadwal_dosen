@@ -1,7 +1,6 @@
 # SIMASTER Lecturer Schedule Scraper
 
-Scrapes lecturer teaching schedules from the SIMASTER portal
-(`https://simaster.ugm.ac.id/akademik/dsn_jadwal_dosen/`) by attaching to a Google
+Scrapes lecturer teaching schedules from the [SIMASTER portal](https://simaster.ugm.ac.id/akademik/dsn_jadwal_dosen/) by attaching to a Google
 Chrome instance running on Windows from WSL2 over the Chrome DevTools Protocol
 (CDP).
 
@@ -40,7 +39,7 @@ Nuhamunada*) this yields **15 courses / 153 schedule entries**.
 First, clone the repository
 
 ```bash
-git clone https://github.com/matinnuhamunada/simaster_jadwal_dosen.git.
+git clone https://github.com/matinnuhamunada/simaster_jadwal_dosen.git
 cd simaster_jadwal_dosen
 ```
 
@@ -223,7 +222,7 @@ to email or open from a USB stick.
 ```
 simaster [--lecturer NAME]... [--names FILE]... [--semester SEMESTER]
          [--outdir DIR] [--endpoint URL] [--max-login-min MIN]
-         [--verbose] [--version]
+         [--verbose] [--from-scratch] [--version]
 
 simaster analyze --dir DIR --semester SEMESTER [--warn WARN] [--min MIN]
                  [--max MAX] [--names FILE] [--outdir DIR]
@@ -243,6 +242,7 @@ simaster clean --dir DIR --semester SEMESTER --names FILE [--outdir DIR]
 | `--endpoint` | CDP base URL, e.g. `http://172.31.160.1:9223` (default: auto-discovered WSL gateway). |
 | `--max-login-min` | Minutes to wait for a manual login (default `30`). |
 | `--verbose` | Print the full `list_dosen` responses. |
+| `--from-scratch` | Ignore existing output files and re-scrape every lecturer. Default: verify existing outputs and only scrape what's missing/incomplete. |
 | `analyze --dir` | Directory holding `jadwal_*.json` results (use `data/clean/` for the clean dataset). |
 | `analyze --min` | Lower edge of the ideal OK band (default `8`). |
 | `analyze --max` | Overload limit (default `16`). |
@@ -256,6 +256,17 @@ Provide at least one `--lecturer` or `--names`. Names are deduplicated, and all
 lecturers share one Chrome session. Per-lecturer failures (e.g. an unresolvable
 `dosenId`) are reported and the remaining names are still scraped; the exit code
 is non-zero if any name failed.
+
+Each lecturer's `.json`/`.csv` is written as soon as they're scraped, not at the
+end of the batch. Before scraping, every requested lecturer is checked against
+`--outdir`: if a complete, self-consistent output already exists (files present,
+JSON parses, `meta` counts match the actual course/entry data, CSV header and
+row count agree), that lecturer is skipped. This means a run interrupted by a
+dropped connection — the common failure mode on the WSL2⇄Windows Chrome bridge —
+can just be re-run with the same command: already-scraped lecturers are skipped
+and only the rest (including any left mid-write when the connection dropped,
+which fails the integrity check) are re-scraped. Pass `--from-scratch` to
+ignore existing outputs and re-scrape everyone.
 
 ## Running the tests
 

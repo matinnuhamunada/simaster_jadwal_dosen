@@ -116,9 +116,19 @@ in the attached browser.
   slugify); the record/date logic lives here, not in JS, for testability.
 - `src/simaster/batch.py` — reads the names file (one name per line; blank/`#`
   lines ignored; titles preserved).
-- `src/simaster/output.py` — writes `jadwal_<slug>_<semester>.json/.csv`.
+- `src/simaster/output.py` — writes `jadwal_<slug>_<semester>.json/.csv`;
+  `verify_lecturer_output()` integrity-checks an existing pair (files present,
+  JSON parses, `meta` counts match the data, CSV header/row count agree) so a
+  resumed run can trust it and skip re-scraping.
 - `src/simaster/cli.py` — argparse CLI; `run_all()` accepts an injectable
-  scraper factory for offline tests.
+  scraper factory for offline tests. Writes each lecturer's output as soon as
+  they're scraped (not batched at the end) and, unless `--from-scratch`,
+  skips lecturers whose output already passes `verify_lecturer_output()` —
+  so a run cut off by a dropped connection resumes on re-run instead of
+  starting over. An unexpected (non-domain) error mid-scrape is treated as
+  fatal for the run and stops the batch early rather than retrying every
+  remaining name against a likely-dead connection; already-written lecturers
+  are unaffected.
 - `scrape.py` — legacy shim that calls the CLI with the old hardcoded defaults.
 - `tests/` — offline unit tests (`pytest`); live-CDP tests behind
   `@pytest.mark.integration` (skipped by default).
