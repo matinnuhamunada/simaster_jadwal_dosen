@@ -20,6 +20,8 @@ OK_HIGH_SKS = 12.0
 MEETING_WARN_MIN = 8
 MEETING_WARN_MAX = 14
 
+PROGRAM_LEVELS = ["S1", "S2", "S3", "PROFESI", "OTHER"]
+
 SUMMARY_HEADER = [
     "dosen",
     "dosenId",
@@ -37,6 +39,8 @@ DETAIL_HEADER = [
     "dosen",
     "kode",
     "mata_kuliah",
+    "rumpun",
+    "level",
     "kelas",
     "sks",
     "class_meetings",
@@ -93,11 +97,30 @@ def classify(
     return "OVERLOADED"
 
 
-def is_s3(course: dict) -> bool:
-    """True for S3 (DOKTOR BIOLOGI) classes."""
-    rumpun = (course.get("rumpun") or "").strip()
+def program_level(course: dict) -> str:
+    """Classify a course's program level (prodi/rumpun) as S1/S2/S3/PROFESI.
+
+    Detected from keywords in the ``rumpun`` tag ('DOKTOR' -> S3, 'MAGISTER'
+    -> S2, 'PROFESI' -> PROFESI, else 'S1' -> S1); the DOKTOR BIOLOGI ``bidb``
+    kode prefix forces S3 even when ``rumpun`` disagrees or is missing (same
+    fallback ``is_s3`` has always used). Anything unrecognized is ``OTHER``.
+    """
+    rumpun = (course.get("rumpun") or "").strip().upper()
     kode = (course.get("kode") or "").strip()
-    return rumpun == S3_RUMPUN or _fold(kode).startswith("bidb")
+    if "DOKTOR" in rumpun or _fold(kode).startswith("bidb"):
+        return "S3"
+    if "MAGISTER" in rumpun:
+        return "S2"
+    if "PROFESI" in rumpun:
+        return "PROFESI"
+    if "S1" in rumpun:
+        return "S1"
+    return "OTHER"
+
+
+def is_s3(course: dict) -> bool:
+    """True for S3 (doctoral) classes."""
+    return program_level(course) == "S3"
 
 
 def compute_lecturer_load(courses: list[dict], dosen: str) -> dict:
@@ -134,6 +157,8 @@ def compute_lecturer_load(courses: list[dict], dosen: str) -> dict:
             {
                 "kode": c.get("kode", ""),
                 "mata_kuliah": c.get("mata_kuliah", ""),
+                "rumpun": (c.get("rumpun") or "").strip(),
+                "level": program_level(c),
                 "kelas": c.get("kelas", ""),
                 "sks": sks,
                 "class_meetings": class_meetings,
@@ -322,6 +347,19 @@ def build_report(result: dict) -> str:
                 )
         lines.append("")
 
+    lines.append("## By program level")
+    level_totals = {lvl: {"n": 0, "sks": 0.0} for lvl in PROGRAM_LEVELS}
+    for r in result["classes"]:
+        t = level_totals.setdefault(r["level"], {"n": 0, "sks": 0.0})
+        t["n"] += 1
+        t["sks"] += r["est_credit"]
+    lines.append("| Level | #classes | Total est. SKS |")
+    lines.append("| --- | ---: | ---: |")
+    for lvl in PROGRAM_LEVELS:
+        t = level_totals[lvl]
+        lines.append(f"| {lvl} | {t['n']} | {t['sks']:g} |")
+    lines.append("")
+
     lines.append(f"## Warnings ({len(result['warnings'])})")
     if result["warnings"]:
         for w in result["warnings"]:
@@ -331,13 +369,15 @@ def build_report(result: dict) -> str:
     lines.append("")
 
     lines.append(f"## Per-class detail ({len(result['classes'])})")
-    lines.append("| Lecturer | kode | mata_kuliah | kelas | sks | meetings | own | credit | est | s3 |")
-    lines.append("| --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |")
+    lines.append(
+        "| Lecturer | kode | mata_kuliah | rumpun | level | kelas | sks | meetings | own | credit | est | s3 |"
+    )
+    lines.append("| --- | --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |")
     for r in result["classes"]:
         lines.append(
-            f"| {r['dosen']} | {r['kode']} | {r['mata_kuliah']} | {r['kelas']} | "
-            f"{r['sks']:g} | {r['class_meetings']} | {r['own_meetings']} | "
-            f"{r['own_credit']:g} | {r['est_credit']:g} | {r['is_s3']} |"
+            f"| {r['dosen']} | {r['kode']} | {r['mata_kuliah']} | {r['rumpun']} | "
+            f"{r['level']} | {r['kelas']} | {r['sks']:g} | {r['class_meetings']} | "
+            f"{r['own_meetings']} | {r['own_credit']:g} | {r['est_credit']:g} | {r['is_s3']} |"
         )
     lines.append("")
     return "\n".join(lines)

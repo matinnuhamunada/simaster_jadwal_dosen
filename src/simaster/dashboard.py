@@ -12,7 +12,7 @@ import json
 from datetime import datetime
 from pathlib import Path
 
-from .load import OK_HIGH_SKS, WARN_SKS
+from .load import OK_HIGH_SKS, PROGRAM_LEVELS, WARN_SKS
 
 DASHBOARD_FILENAME = "load_dashboard.html"
 
@@ -25,6 +25,14 @@ STATUS_COLORS = {
     "UNDERLOADED": "#b7950b",
     "WARNING": "#e74c3c",
     "NO_DATA": "#607d8b",
+}
+
+LEVEL_COLORS = {
+    "S1": "#2874a6",
+    "S2": "#6c3483",
+    "S3": "#117864",
+    "PROFESI": "#935116",
+    "OTHER": "#616a6b",
 }
 
 LECTURER_COLUMNS = [
@@ -43,6 +51,8 @@ CLASS_COLUMNS = [
     ("dosen", "Lecturer"),
     ("kode", "Kode"),
     ("mata_kuliah", "Mata Kuliah"),
+    ("rumpun", "Rumpun/Prodi"),
+    ("level", "Level"),
     ("kelas", "Kelas"),
     ("sks", "SKS"),
     ("class_meetings", "Meetings"),
@@ -66,6 +76,28 @@ def _status_css() -> str:
         f".status-{status} {{ --status-color: {color}; }}"
         for status, color in STATUS_COLORS.items()
     )
+
+
+def _level_css() -> str:
+    return "\n".join(
+        f".level-{level} {{ --level-color: {color}; }}"
+        for level, color in LEVEL_COLORS.items()
+    )
+
+
+def _level_cards(result: dict) -> str:
+    counts = {level: 0 for level in PROGRAM_LEVELS}
+    for row in result["classes"]:
+        counts[row["level"]] = counts.get(row["level"], 0) + 1
+    cards = []
+    for level in PROGRAM_LEVELS:
+        cards.append(
+            f'<div class="card level-{level}" '
+            f'onclick="classFilterInput.value=\'{level}\';classTable.render();">'
+            f'<div class="card-count">{counts[level]}</div>'
+            f'<div class="card-label">{_e(level)}</div></div>'
+        )
+    return "\n".join(cards)
 
 
 def _stat_cards(result: dict) -> str:
@@ -160,6 +192,10 @@ header .meta {{ color: var(--muted); margin: 0 0 1.5rem; }}
 .card.status-UNDERLOADED, .card.status-WARNING, .card.status-NO_DATA {{
   border-left-color: var(--status-color);
 }}
+.card.level-S1, .card.level-S2, .card.level-S3,
+.card.level-PROFESI, .card.level-OTHER {{
+  border-left-color: var(--level-color);
+}}
 .card-count {{ font-size: 1.6rem; font-weight: 700; }}
 .card-label {{ color: var(--muted); font-size: 0.85rem; }}
 section {{
@@ -196,7 +232,9 @@ tbody td {{ padding: 0.35rem 0.6rem; border-bottom: 1px solid var(--border); }}
 tbody tr:nth-child(even) {{ background: rgba(0,0,0,0.02); }}
 tbody tr.lecturer-row {{ cursor: pointer; }}
 tbody tr[class*="status-"] td:first-child {{ border-left: 3px solid var(--status-color); }}
+tbody tr[class*="level-"] td:first-child {{ border-left: 3px solid var(--level-color); }}
 {_status_css()}
+{_level_css()}
 .badge {{
   display: inline-block;
   padding: 0.1rem 0.5rem;
@@ -204,6 +242,10 @@ tbody tr[class*="status-"] td:first-child {{ border-left: 3px solid var(--status
   font-size: 0.8rem;
   color: #fff;
   background: var(--status-color);
+}}
+.badge.level-S1, .badge.level-S2, .badge.level-S3,
+.badge.level-PROFESI, .badge.level-OTHER {{
+  background: var(--level-color);
 }}
 #warnings-list {{ margin: 0; padding-left: 1.25rem; }}
 </style>
@@ -234,6 +276,13 @@ tbody tr[class*="status-"] td:first-child {{ border-left: 3px solid var(--status
   </table>
 </section>
 
+<section id="levels">
+  <h2>By program level</h2>
+  <div class="stat-cards">
+{_level_cards(result)}
+  </div>
+</section>
+
 <section id="warnings">
   <h2>Warnings ({len(result["warnings"])})</h2>
   <ul id="warnings-list">
@@ -243,7 +292,7 @@ tbody tr[class*="status-"] td:first-child {{ border-left: 3px solid var(--status
 
 <section id="classes">
   <h2>Per-class detail</h2>
-  <input id="class-filter" type="search" placeholder="Filter classes...">
+  <input id="class-filter" type="search" placeholder="Filter classes (lecturer, kode, rumpun, level...)">
   <span id="class-filter-count" class="filter-count"></span>
   <table id="class-table">
     <thead><tr>
@@ -293,9 +342,9 @@ function makeTable(opts) {{
       if (onRowClick) tr.addEventListener("click", () => onRowClick(r));
       for (const key of columns) {{
         const td = document.createElement("td");
-        if (key === "status") {{
+        if (key === "status" || key === "level") {{
           const span = document.createElement("span");
-          span.className = "badge status-" + r[key];
+          span.className = "badge " + key + "-" + r[key];
           span.textContent = r[key];
           td.appendChild(span);
         }} else {{
@@ -329,6 +378,7 @@ const classTable = makeTable({{
   filterInput: classFilterInput,
   countEl: document.getElementById("class-filter-count"),
   defaultKey: "dosen",
+  rowClass: r => "level-" + r.level,
 }});
 
 function wireSort(tableId, table) {{

@@ -176,14 +176,20 @@ Outputs (written to `--outdir`, default `.`):
 - `load_summary.csv` — lecturer, strict total SKS, estimated SKS (`est_sks`,
   unscheduled classes assumed at full credit), estimated excluding S3
   (`est_sks_no_s3`), #unscheduled classes, #S3 classes, status.
-- `load_detail.csv` — one row per class (class meetings, own meetings, strict
-  credit, estimated credit, S3 flag).
+- `load_detail.csv` — one row per class (rumpun/prodi, program level, class
+  meetings, own meetings, strict credit, estimated credit, S3 flag).
 - `load_report.md` — grouped human-readable report with the same columns plus
-  warnings for any class whose meeting count differs from 14 (e.g. courses with
-  no booked meetings, which contribute 0 SKS to the strict total).
+  a program-level breakdown and warnings for any class whose meeting count
+  differs from 14 (e.g. courses with no booked meetings, which contribute 0
+  SKS to the strict total).
 
 The `status` flag is banded from `total_sks` (see the table above); estimated
-`est_sks` and `est_sks_no_s3` are reported alongside for comparison.
+`est_sks` and `est_sks_no_s3` are reported alongside for comparison. Each
+class is also tagged with its `rumpun` (prodi/program-studi, e.g. `[PRODI] S1
+BIOLOGI`) and a derived `level` — `S1`, `S2` (Magister), `S3` (Doctoral),
+`PROFESI`, or `OTHER` — classified from keywords in `rumpun` (`DOKTOR`/
+`MAGISTER`/`S1`/`PROFESI`), with the `bidb` kode prefix forcing `S3` the same
+way it already does for the `is_s3` flag.
 
 ### Generate a dashboard
 
@@ -199,6 +205,7 @@ conda run -n simaster simaster dashboard --dir data/clean --semester 20261 \
 Takes the same `--dir` / `--semester` / `--min` / `--max` / `--warn` /
 `--names` / `--outdir` options as `analyze` (see above for band definitions)
 and writes `load_dashboard.html`: status-colored summary cards, a
+program-level breakdown (S1/S2/S3/PROFESI/OTHER, see above), a
 click-to-sort/filterable lecturers table, and a filterable per-class detail
 table (clicking a lecturer row filters the class table to their classes). The
 file has inline CSS/JS and no external assets or network calls, so it's safe

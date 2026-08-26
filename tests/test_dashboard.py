@@ -72,6 +72,23 @@ class TestRenderDashboard:
         out = render_dashboard(result)
         assert "Warnings (1)" in out
 
+    def test_program_level_breakdown_present(self, tmp_path):
+        courses = [
+            {**COURSE, "kode": "BISB1", "rumpun": "[PRODI] S1 BIOLOGI"},
+            {**COURSE, "kode": "BIMB1", "rumpun": "[PRODI] MAGISTER BIOLOGI"},
+            {**COURSE, "kode": "BIDB1", "rumpun": "[PRODI] DOKTOR BIOLOGI"},
+        ]
+        _write_fixture(tmp_path, "Matin Nuhamunada, S.Si., M.Sc.", courses=courses)
+        result = aggregate_loads(tmp_path, "20261", 8, 16)
+        out = render_dashboard(result)
+        assert "By program level" in out
+        for level in ["S1", "S2", "S3", "PROFESI", "OTHER"]:
+            assert f'level-{level}"' in out
+        # rumpun/level columns present in the per-class table headers
+        assert "Rumpun/Prodi" in out
+        assert '<th data-key="level">Level</th>' in out
+        assert json.dumps("[PRODI] MAGISTER BIOLOGI") in out
+
     def test_empty_result_does_not_crash(self, tmp_path):
         result = aggregate_loads(tmp_path, "20261", 8, 16)
         assert result["lecturers"] == []

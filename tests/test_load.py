@@ -8,6 +8,7 @@ from simaster.load import (
     classify,
     compute_lecturer_load,
     is_s3,
+    program_level,
     write_reports,
 )
 
@@ -53,6 +54,21 @@ class TestComputeLecturerLoad:
         assert load["total_credit"] == 2.0
         assert load["n_classes"] == 1
         assert load["classes"][0]["own_meetings"] == MEETINGS_PER_SEMESTER
+
+    def test_classes_include_rumpun_and_level(self):
+        courses = [
+            {
+                "kode": "BIMB101",
+                "mata_kuliah": "Biologi Molekuler Lanjut",
+                "kelas": "A",
+                "sks": "2.00",
+                "rumpun": "[PRODI] MAGISTER BIOLOGI",
+                "jadwal": [_entry("Matin Nuhamunada, S.Si., M.Sc.")] * MEETINGS_PER_SEMESTER,
+            }
+        ]
+        load = compute_lecturer_load(courses, "Matin Nuhamunada, S.Si., M.Sc.")
+        assert load["classes"][0]["rumpun"] == "[PRODI] MAGISTER BIOLOGI"
+        assert load["classes"][0]["level"] == "S2"
 
     def test_team_taught_half_share(self):
         courses = [
@@ -176,6 +192,34 @@ class TestIsS3:
         assert is_s3({"rumpun": "[PRODI] S1 BIOLOGI", "kode": "BISB262101"}) is False
 
 
+class TestProgramLevel:
+    def test_doktor_is_s3(self):
+        assert program_level({"rumpun": "[PRODI] DOKTOR BIOLOGI", "kode": "BIDB203201"}) == "S3"
+
+    def test_magister_is_s2(self):
+        assert program_level({"rumpun": "[PRODI] MAGISTER BIOLOGI", "kode": "BIMB101"}) == "S2"
+        assert program_level({"rumpun": "Magister Manajemen", "kode": "MAN101"}) == "S2"
+
+    def test_s1_prefixed_rumpun(self):
+        assert program_level({"rumpun": "[PRODI] S1 BIOLOGI", "kode": "BISB262101"}) == "S1"
+        assert program_level({"rumpun": "[GABUNG] S1 GEOGRAFI", "kode": "GEGL101"}) == "S1"
+
+    def test_profesi(self):
+        assert (
+            program_level(
+                {"rumpun": "[PRODI] Profesi Kurator Keanekaragaman Hayati", "kode": "BIPO101"}
+            )
+            == "PROFESI"
+        )
+
+    def test_unrecognized_is_other(self):
+        assert program_level({"rumpun": "Something Else", "kode": "X"}) == "OTHER"
+        assert program_level({"rumpun": "", "kode": "X"}) == "OTHER"
+
+    def test_kode_prefix_forces_s3_over_rumpun_text(self):
+        assert program_level({"rumpun": "[PRODI] S1 BIOLOGI", "kode": "BIDB203201"}) == "S3"
+
+
 def _write_fixture(dirpath, stem, dosen, dosen_id, courses):
     path = dirpath / f"jadwal_{stem}_20261.json"
     path.write_text(
@@ -268,4 +312,10 @@ class TestWriteReports:
         report = (out / "load_report.md").read_text(encoding="utf-8")
         assert "# Teaching load report" in report
         assert "## Warnings" in report
+        assert "## By program level" in report
         assert "Matin Nuhamunada" in report
+
+        with (out / "load_detail.csv").open(newline="", encoding="utf-8-sig") as f:
+            detail_rows = list(csv.reader(f))
+        assert "rumpun" in detail_rows[0]
+        assert "level" in detail_rows[0]
