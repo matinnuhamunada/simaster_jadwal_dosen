@@ -379,14 +379,6 @@ def build_report(result: dict) -> str:
     lines.append(f"| **TOTAL** | **{total_n}** | **{total_sks:g}** |")
     lines.append("")
 
-    lines.append(f"## Warnings ({len(result['warnings'])})")
-    if result["warnings"]:
-        for w in result["warnings"]:
-            lines.append(f"- {w}")
-    else:
-        lines.append("_none_")
-    lines.append("")
-
     lines.append(f"## Per-class detail ({len(result['classes'])})")
     lines.append(
         "| Lecturer | kode | mata_kuliah | rumpun | level | kelas | sks | meetings | own | credit | est | s3 |"
@@ -398,5 +390,13 @@ def build_report(result: dict) -> str:
             f"{r['level']} | {r['kelas']} | {r['sks']:g} | {r['class_meetings']} | "
             f"{r['own_meetings']} | {r['own_credit']:g} | {r['est_credit']:g} | {r['is_s3']} |"
         )
+    lines.append("")
+
+    lines.append(f"## Warnings ({len(result['warnings'])})")
+    if result["warnings"]:
+        for w in result["warnings"]:
+            lines.append(f"- {w}")
+    else:
+        lines.append("_none_")
     lines.append("")
     return "\n".join(lines)

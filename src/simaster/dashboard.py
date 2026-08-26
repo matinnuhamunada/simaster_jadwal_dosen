@@ -310,13 +310,6 @@ tbody tr[class*="level-"] td:first-child {{ border-left: 3px solid var(--level-c
   </div>
 </section>
 
-<section id="warnings">
-  <h2>Warnings ({len(result["warnings"])})</h2>
-  <ul id="warnings-list">
-{_warnings_html(result["warnings"])}
-  </ul>
-</section>
-
 <section id="classes">
   <h2>Per-class detail</h2>
   <input id="class-filter" type="search" placeholder="Filter classes (lecturer, kode, rumpun, level...)">
@@ -327,6 +320,13 @@ tbody tr[class*="level-"] td:first-child {{ border-left: 3px solid var(--level-c
     </tr></thead>
     <tbody></tbody>
   </table>
+</section>
+
+<section id="warnings">
+  <h2>Warnings ({len(result["warnings"])})</h2>
+  <ul id="warnings-list">
+{_warnings_html(result["warnings"])}
+  </ul>
 </section>
 </div>
 
@@ -343,12 +343,33 @@ const CLASS_SKS = {class_sks_json};
 const filterInput = document.getElementById("filter");
 const classFilterInput = document.getElementById("class-filter");
 
+// Sequential single-hue (blue) heatmap: white at 0 up to a contrast-safe mid
+// step at each column's max, so dark table text stays readable (AA-safe
+// through this endpoint). Scale is fixed per column from the full dataset,
+// not the filtered view, so a cell's shade never shifts as you filter/sort.
+const HEATMAP_LOW = [255, 255, 255];
+const HEATMAP_HIGH = [85, 152, 231]; // #5598e7
+
+function heatmapColor(t) {{
+  const c = HEATMAP_LOW.map((lo, i) => Math.round(lo + (HEATMAP_HIGH[i] - lo) * t));
+  return "rgb(" + c.join(",") + ")";
+}}
+
+function columnMaxes(data, keys) {{
+  const maxes = {{}};
+  for (const key of keys) {{
+    maxes[key] = data.reduce((m, r) => Math.max(m, Number(r[key]) || 0), 0);
+  }}
+  return maxes;
+}}
+
 function makeTable(opts) {{
   const {{
     data, columns, tbody, filterInput, countEl, defaultKey, rowClass, onRowClick,
     centeredColumns = [], sksColumns = [],
   }} = opts;
   const state = {{ key: defaultKey, dir: -1 }};
+  const heatmapMax = columnMaxes(data, centeredColumns);
 
   function matches(row, q) {{
     if (!q) return true;
@@ -383,7 +404,11 @@ function makeTable(opts) {{
           td.appendChild(span);
         }} else {{
           td.textContent = sksColumns.includes(key) ? Number(r[key]).toFixed(1) : r[key];
-          if (centeredColumns.includes(key)) td.className = "num";
+          if (centeredColumns.includes(key)) {{
+            td.className = "num";
+            const max = heatmapMax[key];
+            if (max > 0) td.style.backgroundColor = heatmapColor((Number(r[key]) || 0) / max);
+          }}
         }}
         tr.appendChild(td);
       }}
