@@ -11,7 +11,8 @@ profile that already holds a SIMASTER login. No credentials are ever asked for.
 
 It is organized as an installable Python package (`simaster`) with a CLI, and
 supports both single-lecturer and batch scraping (from a text file of names),
-plus a teaching-load audit command (`simaster analyze`).
+plus a teaching-load audit command (`simaster analyze`) and a self-contained
+HTML dashboard (`simaster dashboard`).
 
 ## Outputs
 
@@ -184,6 +185,25 @@ Outputs (written to `--outdir`, default `.`):
 The `status` flag is banded from `total_sks` (see the table above); estimated
 `est_sks` and `est_sks_no_s3` are reported alongside for comparison.
 
+### Generate a dashboard
+
+Build a single self-contained HTML file (no server, works offline, open
+directly in a browser) summarizing the same teaching-load data as `analyze`,
+with sortable/filterable tables:
+
+```bash
+conda run -n simaster simaster dashboard --dir data/clean --semester 20261 \
+    --min 12 --max 16 --names target.md --outdir results
+```
+
+Takes the same `--dir` / `--semester` / `--min` / `--max` / `--warn` /
+`--names` / `--outdir` options as `analyze` (see above for band definitions)
+and writes `load_dashboard.html`: status-colored summary cards, a
+click-to-sort/filterable lecturers table, and a filterable per-class detail
+table (clicking a lecturer row filters the class table to their classes). The
+file has inline CSS/JS and no external assets or network calls, so it's safe
+to email or open from a USB stick.
+
 ### CLI reference
 
 ```
@@ -193,6 +213,9 @@ simaster [--lecturer NAME]... [--names FILE]... [--semester SEMESTER]
 
 simaster analyze --dir DIR --semester SEMESTER [--warn WARN] [--min MIN]
                  [--max MAX] [--names FILE] [--outdir DIR]
+
+simaster dashboard --dir DIR --semester SEMESTER [--warn WARN] [--min MIN]
+                   [--max MAX] [--names FILE] [--outdir DIR]
 
 simaster clean --dir DIR --semester SEMESTER --names FILE [--outdir DIR]
 ```
@@ -210,6 +233,10 @@ simaster clean --dir DIR --semester SEMESTER --names FILE [--outdir DIR]
 | `analyze --min` | Lower edge of the ideal OK band (default `8`). |
 | `analyze --max` | Overload limit (default `16`). |
 | `analyze --warn` | Below this teaching SKS is a WARNING (default `6`). |
+| `dashboard --dir` | Directory holding `jadwal_*.json` results (use `data/clean/` for the clean dataset). |
+| `dashboard --min` | Lower edge of the ideal OK band (default `8`). |
+| `dashboard --max` | Overload limit (default `16`). |
+| `dashboard --warn` | Below this teaching SKS is a WARNING (default `6`). |
 
 Provide at least one `--lecturer` or `--names`. Names are deduplicated, and all
 lecturers share one Chrome session. Per-lecturer failures (e.g. an unresolvable

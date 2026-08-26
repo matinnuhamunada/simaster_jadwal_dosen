@@ -89,6 +89,48 @@ class TestAnalyzeArgs:
         assert args.analyze is False
 
 
+class TestDashboardArgs:
+    def test_dashboard_dispatch(self):
+        args = parse_args(["dashboard"])
+        assert args.dashboard is True
+        assert args.dir == "data"
+        assert args.semester == "20261"
+        assert args.min_sks == 8.0
+        assert args.max_sks == 16.0
+        assert args.warn_sks == 6.0
+        assert args.names is None
+        assert args.outdir == "."
+
+    def test_dashboard_options(self):
+        args = parse_args(
+            [
+                "dashboard",
+                "--dir",
+                "results",
+                "--semester",
+                "20251",
+                "--min",
+                "9",
+                "--max",
+                "14",
+                "--warn",
+                "5",
+                "--outdir",
+                "out",
+            ]
+        )
+        assert args.dir == "results"
+        assert args.semester == "20251"
+        assert args.min_sks == 9.0
+        assert args.max_sks == 14.0
+        assert args.warn_sks == 5.0
+        assert args.outdir == "out"
+
+    def test_scrape_not_dashboard(self):
+        args = parse_args(["--lecturer", "A"])
+        assert getattr(args, "dashboard", False) is False
+
+
 class TestCleanArgs:
     def test_clean_dispatch(self):
         args = parse_args(["clean"])
@@ -138,6 +180,39 @@ class TestMainAnalyze:
         rc = main(["analyze", "--dir", str(tmp_path), "--semester", "20261", "--outdir", str(out)])
         assert rc == 0
         assert (out / "load_summary.csv").exists()
+        assert "wrote" in capsys.readouterr().out
+
+
+class TestMainDashboard:
+    def test_runs_dashboard_offline(self, tmp_path, capsys):
+        course = {
+            "kode": "K1",
+            "mata_kuliah": "Genetika",
+            "kelas": "A",
+            "sks": "2.00",
+            "jadwal": [{"dosen": "Matin Nuhamunada, S.Si., M.Sc."}] * 14,
+        }
+        (tmp_path / "jadwal_matin_nuhamunada_s_si_m_sc_20261.json").write_text(
+            json.dumps(
+                {
+                    "meta": {
+                        "semester": "20261",
+                        "dosen": "Matin Nuhamunada, S.Si., M.Sc.",
+                        "dosenId": "16764",
+                    },
+                    "courses": [course],
+                }
+            ),
+            encoding="utf-8",
+        )
+        out = tmp_path / "out"
+        rc = main(["dashboard", "--dir", str(tmp_path), "--semester", "20261", "--outdir", str(out)])
+        assert rc == 0
+        html_path = out / "load_dashboard.html"
+        assert html_path.exists()
+        content = html_path.read_text(encoding="utf-8")
+        assert "<!doctype html>" in content.lower()
+        assert "Matin Nuhamunada" in content
         assert "wrote" in capsys.readouterr().out
 
 

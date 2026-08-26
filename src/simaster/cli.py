@@ -8,6 +8,7 @@ import sys
 from . import __version__
 from .batch import read_lecturers
 from .clean import clean_all
+from .dashboard import write_dashboard
 from .load import aggregate_loads, write_reports
 from .output import write_outputs
 from .scraper import Scraper, SEMESTER, build_meta
@@ -109,6 +110,56 @@ def _analyze_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _dashboard_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="simaster dashboard",
+        description="Generate a self-contained HTML teaching-load dashboard from scraped SIMASTER schedule files.",
+    )
+    parser.add_argument(
+        "--dir",
+        default="data",
+        help="directory holding jadwal_*_<semester>.json files (default: data).",
+    )
+    parser.add_argument(
+        "--semester", default=SEMESTER, help=f"semester code (default: {SEMESTER})."
+    )
+    parser.add_argument(
+        "--min",
+        dest="min_sks",
+        type=float,
+        default=8.0,
+        help="lower edge of the ideal OK band (default: 8).",
+    )
+    parser.add_argument(
+        "--max",
+        dest="max_sks",
+        type=float,
+        default=16.0,
+        help="overload limit; teaching above this is OVERLOADED (default: 16).",
+    )
+    parser.add_argument(
+        "--warn",
+        dest="warn_sks",
+        type=float,
+        default=6.0,
+        help="teaching below this is a WARNING (default: 6).",
+    )
+    parser.add_argument(
+        "--names",
+        default=None,
+        metavar="FILE",
+        help="names file (like target.md) to report NO_DATA for missing lecturers.",
+    )
+    parser.add_argument(
+        "--outdir", default=".", help="output directory (default: current directory)."
+    )
+    parser.add_argument(
+        "--version", action="version", version=f"%(prog)s {__version__}"
+    )
+    parser.set_defaults(dashboard=True)
+    return parser
+
+
 def _clean_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="simaster clean",
@@ -142,6 +193,8 @@ def parse_args(argv=None) -> argparse.Namespace:
     argv = list(sys.argv[1:] if argv is None else argv)
     if argv and argv[0] == "analyze":
         return _analyze_parser().parse_args(argv[1:])
+    if argv and argv[0] == "dashboard":
+        return _dashboard_parser().parse_args(argv[1:])
     if argv and argv[0] == "clean":
         return _clean_parser().parse_args(argv[1:])
     return _scrape_parser().parse_args(argv)
@@ -213,6 +266,23 @@ def run_analyze(args) -> int:
     return 0
 
 
+def run_dashboard(args) -> int:
+    names = read_lecturers(args.names) if args.names else None
+    result = aggregate_loads(
+        args.dir,
+        args.semester,
+        args.min_sks,
+        args.max_sks,
+        warn=args.warn_sks,
+        names=names,
+    )
+    path = write_dashboard(result, args.outdir)
+    print(f"[dashboard] {len(result['lecturers'])} lecturers, "
+          f"{len(result['classes'])} class-rows, {len(result['warnings'])} warnings")
+    print(f"[dashboard] wrote {path}")
+    return 0
+
+
 def run_clean(args) -> int:
     names = read_lecturers(args.names) if args.names else []
     result = clean_all(args.dir, args.semester, names, outdir=args.outdir)
@@ -229,6 +299,8 @@ def main(argv=None) -> int:
     args = parse_args(argv)
     if getattr(args, "analyze", False):
         return run_analyze(args)
+    if getattr(args, "dashboard", False):
+        return run_dashboard(args)
     if getattr(args, "clean", False):
         return run_clean(args)
 
