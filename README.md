@@ -154,7 +154,7 @@ meetings** per semester, and a lecturer's share of a class is
 `(meetings they teach / 14) * sks`. Their total load is the sum over all their
 classes.
 
-Status is banded from the strict teaching SKS (`total_sks`), defaulting to:
+Status is banded from the strict teaching SKS (`scheduled_sks`), defaulting to:
 
 | Band (teaching SKS) | Status |
 | --- | --- |
@@ -173,23 +173,30 @@ courses with no booked meetings, which contribute 0 SKS to the strict total).
 
 Outputs (written to `--outdir`, default `.`):
 
-- `load_summary.csv` — lecturer, strict total SKS, estimated SKS (`est_sks`,
-  unscheduled classes assumed at full credit), estimated excluding S3
-  (`est_sks_no_s3`), #unscheduled classes, #S3 classes, status.
+- `load_summary.csv` — lecturer, strict scheduled SKS (`scheduled_sks`),
+  estimated SKS (`est_sks`, unscheduled classes assumed at full credit), SKS
+  credit per program level (`sks_s1`, `sks_s2`, `sks_s3`, `sks_profesi`), SKS
+  tied up in unscheduled classes (`sks_unscheduled`), #classes, #courses,
+  status.
 - `load_detail.csv` — one row per class (rumpun/prodi, program level, class
   meetings, own meetings, strict credit, estimated credit, S3 flag).
 - `load_report.md` — grouped human-readable report with the same columns plus
-  a program-level breakdown and warnings for any class whose meeting count
-  differs from 14 (e.g. courses with no booked meetings, which contribute 0
-  SKS to the strict total).
+  a program-level breakdown (with a grand-total row) and warnings for any
+  class whose meeting count differs from 14 (e.g. courses with no booked
+  meetings, which contribute 0 SKS to the strict total).
 
-The `status` flag is banded from `total_sks` (see the table above); estimated
-`est_sks` and `est_sks_no_s3` are reported alongside for comparison. Each
-class is also tagged with its `rumpun` (prodi/program-studi, e.g. `[PRODI] S1
-BIOLOGI`) and a derived `level` — `S1`, `S2` (Magister), `S3` (Doctoral),
-`PROFESI`, or `OTHER` — classified from keywords in `rumpun` (`DOKTOR`/
-`MAGISTER`/`S1`/`PROFESI`), with the `bidb` kode prefix forcing `S3` the same
-way it already does for the `is_s3` flag.
+The `status` flag is banded from `scheduled_sks` (see the table above);
+`est_sks` is reported alongside for comparison. `scheduled_sks` (and the
+per-level `sks_s1`/`sks_s2`/`sks_s3`/`sks_profesi` totals) are the **strict**
+credit: only classes with a fixed/booked schedule count, and an unscheduled
+class (`class_meetings == 0`) is exempted — it contributes 0 there but still
+counts toward `est_sks` and `sks_unscheduled` (both at full `sks`).
+`sks_s1+sks_s2+sks_s3+sks_profesi` sums to `scheduled_sks` for each lecturer.
+Each class is also tagged with its `rumpun` (prodi/program-studi, e.g.
+`[PRODI] S1 BIOLOGI`) and a derived `level` — `S1`, `S2` (Magister), `S3`
+(Doctoral), `PROFESI`, or `OTHER` — classified from keywords in `rumpun`
+(`DOKTOR`/`MAGISTER`/`S1`/`PROFESI`), with the `bidb` kode prefix forcing
+`S3` the same way it already does for the `is_s3` flag.
 
 ### Generate a dashboard
 

@@ -116,9 +116,11 @@ class TestComputeLecturerLoad:
         assert load == {
             "total_credit": 0.0,
             "est_sks": 0.0,
-            "est_sks_no_s3": 0.0,
-            "n_unscheduled": 0,
-            "n_s3": 0,
+            "sks_unscheduled": 0.0,
+            "sks_s1": 0.0,
+            "sks_s2": 0.0,
+            "sks_s3": 0.0,
+            "sks_profesi": 0.0,
             "n_classes": 0,
             "n_courses": 0,
             "classes": [],
@@ -137,10 +139,10 @@ class TestComputeLecturerLoad:
         load = compute_lecturer_load(courses, "Matin Nuhamunada, S.Si., M.Sc.")
         assert load["est_sks"] == 4.0
         assert load["total_credit"] == 0.0
-        assert load["n_unscheduled"] == 1
+        assert load["sks_unscheduled"] == 4.0
         assert load["classes"][0]["est_credit"] == 4.0
 
-    def test_s3_excluded_from_no_s3_estimate(self):
+    def test_level_sks_by_rumpun(self):
         courses = [
             {
                 "kode": "BIDB267103",
@@ -148,7 +150,7 @@ class TestComputeLecturerLoad:
                 "kelas": "A",
                 "sks": "2.00",
                 "rumpun": "[PRODI] DOKTOR BIOLOGI",
-                "jadwal": [],
+                "jadwal": [_entry("Matin Nuhamunada, S.Si., M.Sc.")] * MEETINGS_PER_SEMESTER,
             },
             {
                 "kode": "BISB262101",
@@ -156,14 +158,39 @@ class TestComputeLecturerLoad:
                 "kelas": "IUP",
                 "sks": "2.00",
                 "rumpun": "[PRODI] S1 BIOLOGI",
-                "jadwal": [],
+                "jadwal": [_entry("Matin Nuhamunada, S.Si., M.Sc.")] * MEETINGS_PER_SEMESTER,
             },
         ]
         load = compute_lecturer_load(courses, "Matin Nuhamunada, S.Si., M.Sc.")
         assert load["est_sks"] == 4.0
-        assert load["est_sks_no_s3"] == 2.0
-        assert load["n_s3"] == 1
+        assert load["sks_s3"] == 2.0
+        assert load["sks_s1"] == 2.0
+        assert load["sks_s2"] == 0.0
+        assert load["sks_profesi"] == 0.0
+        # per-level SKS sums to the grand total (strict credit)
+        assert round(load["sks_s1"] + load["sks_s2"] + load["sks_s3"] + load["sks_profesi"], 2) == load["total_credit"]
         assert load["classes"][0]["is_s3"] is True
+
+    def test_unscheduled_class_excluded_from_scheduled_sks(self):
+        """The strict credit (total_credit / per-level sks_*) only counts
+        classes with a fixed/booked schedule; an unscheduled class
+        contributes 0, even though it still counts toward sks_unscheduled and
+        est_sks."""
+        courses = [
+            {
+                "kode": "K6",
+                "mata_kuliah": "Disertasi",
+                "kelas": "D",
+                "sks": "4.00",
+                "rumpun": "[PRODI] DOKTOR BIOLOGI",
+                "jadwal": [],
+            }
+        ]
+        load = compute_lecturer_load(courses, "Matin Nuhamunada, S.Si., M.Sc.")
+        assert load["total_credit"] == 0.0
+        assert load["est_sks"] == 4.0
+        assert load["sks_unscheduled"] == 4.0
+        assert load["sks_s3"] == 0.0
 
     def test_class_meetings_read_from_field(self):
         courses = [

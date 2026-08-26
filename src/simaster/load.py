@@ -25,11 +25,13 @@ PROGRAM_LEVELS = ["S1", "S2", "S3", "PROFESI", "OTHER"]
 SUMMARY_HEADER = [
     "dosen",
     "dosenId",
-    "total_sks",
+    "scheduled_sks",
     "est_sks",
-    "est_sks_no_s3",
-    "n_unscheduled",
-    "n_s3",
+    "sks_s1",
+    "sks_s2",
+    "sks_s3",
+    "sks_profesi",
+    "sks_unscheduled",
     "n_classes",
     "n_courses",
     "status",
@@ -126,16 +128,18 @@ def is_s3(course: dict) -> bool:
 def compute_lecturer_load(courses: list[dict], dosen: str) -> dict:
     """Per-class credit for one lecturer.
 
-    Strict credit is ``own_meetings/14 * sks``. Estimated credit treats a class
-    with no booked meetings as full ``sks`` (the lecturer is assigned) and
-    otherwise equals the strict credit. ``class_meetings`` comes from the clean
-    file when present (fallback: the jadwal length).
+    Strict credit (``total_credit``) is ``own_meetings/14 * sks``, summed only
+    over classes with a fixed/booked schedule -- a class with no booked
+    meetings contributes 0 and is exempted from it. Estimated credit
+    (``est_sks``) instead treats such an unscheduled class as full ``sks``
+    (the lecturer is assigned) and otherwise equals the strict credit.
+    ``class_meetings`` comes from the clean file when present (fallback: the
+    jadwal length).
     """
     total = 0.0
     est = 0.0
-    est_no_s3 = 0.0
-    n_unscheduled = 0
-    n_s3 = 0
+    unscheduled_sks = 0.0
+    level_credit = {lvl: 0.0 for lvl in PROGRAM_LEVELS}
     classes = []
     for c in courses:
         entries = c.get("jadwal") or []
@@ -144,36 +148,35 @@ def compute_lecturer_load(courses: list[dict], dosen: str) -> dict:
         sks = _sks(c.get("sks"))
         own_credit = own_meetings / MEETINGS_PER_SEMESTER * sks
         est_credit = sks if class_meetings == 0 else own_credit
-        s3 = is_s3(c)
+        level = program_level(c)
         total += own_credit
         est += est_credit
-        if not s3:
-            est_no_s3 += est_credit
         if class_meetings == 0:
-            n_unscheduled += 1
-        if s3:
-            n_s3 += 1
+            unscheduled_sks += est_credit
+        level_credit[level] = level_credit.get(level, 0.0) + own_credit
         classes.append(
             {
                 "kode": c.get("kode", ""),
                 "mata_kuliah": c.get("mata_kuliah", ""),
                 "rumpun": (c.get("rumpun") or "").strip(),
-                "level": program_level(c),
+                "level": level,
                 "kelas": c.get("kelas", ""),
                 "sks": sks,
                 "class_meetings": class_meetings,
                 "own_meetings": own_meetings,
                 "own_credit": round(own_credit, 2),
                 "est_credit": round(est_credit, 2),
-                "is_s3": s3,
+                "is_s3": level == "S3",
             }
         )
     return {
         "total_credit": round(total, 2),
         "est_sks": round(est, 2),
-        "est_sks_no_s3": round(est_no_s3, 2),
-        "n_unscheduled": n_unscheduled,
-        "n_s3": n_s3,
+        "sks_unscheduled": round(unscheduled_sks, 2),
+        "sks_s1": round(level_credit["S1"], 2),
+        "sks_s2": round(level_credit["S2"], 2),
+        "sks_s3": round(level_credit["S3"], 2),
+        "sks_profesi": round(level_credit["PROFESI"], 2),
         "n_classes": len(classes),
         "n_courses": len(set(c["kode"] for c in classes)),
         "classes": classes,
@@ -198,7 +201,8 @@ def aggregate_loads(
     Dedupes by canonical `meta.dosen` (warns on duplicates), flags classes with
     a meeting count outside the expected 8-14 range, and reports expected names
     (from `names`, slugified) that have no result file as `NO_DATA`. The
-    `status` flag is banded from the strict total SKS (`total_sks`).
+    `status` flag is banded from the strict, schedule-only SKS
+    (`scheduled_sks`).
     """
     directory = Path(directory)
     files = sorted(directory.glob(f"jadwal_*_{semester}.json"))
@@ -223,11 +227,13 @@ def aggregate_loads(
             "dosen": dosen,
             "dosenId": meta.get("dosenId"),
             "source_file": f.name,
-            "total_sks": load["total_credit"],
+            "scheduled_sks": load["total_credit"],
             "est_sks": load["est_sks"],
-            "est_sks_no_s3": load["est_sks_no_s3"],
-            "n_unscheduled": load["n_unscheduled"],
-            "n_s3": load["n_s3"],
+            "sks_s1": load["sks_s1"],
+            "sks_s2": load["sks_s2"],
+            "sks_s3": load["sks_s3"],
+            "sks_profesi": load["sks_profesi"],
+            "sks_unscheduled": load["sks_unscheduled"],
             "n_classes": load["n_classes"],
             "n_courses": load["n_courses"],
             "status": classify(load["total_credit"], warn=warn, max_sks=max_sks),
@@ -250,11 +256,13 @@ def aggregate_loads(
                     {
                         "dosen": name,
                         "dosenId": "",
-                        "total_sks": 0.0,
+                        "scheduled_sks": 0.0,
                         "est_sks": 0.0,
-                        "est_sks_no_s3": 0.0,
-                        "n_unscheduled": 0,
-                        "n_s3": 0,
+                        "sks_s1": 0.0,
+                        "sks_s2": 0.0,
+                        "sks_s3": 0.0,
+                        "sks_profesi": 0.0,
+                        "sks_unscheduled": 0.0,
                         "n_classes": 0,
                         "n_courses": 0,
                         "status": "NO_DATA",
@@ -262,7 +270,7 @@ def aggregate_loads(
                     }
                 )
 
-    ordered = sorted(lecturers.values(), key=lambda r: r["total_sks"], reverse=True)
+    ordered = sorted(lecturers.values(), key=lambda r: r["scheduled_sks"], reverse=True)
     ordered = no_data + ordered
     return {
         "lecturers": ordered,
@@ -338,26 +346,37 @@ def build_report(result: dict) -> str:
         if not rows:
             lines.append("_none_")
         else:
-            lines.append("| Lecturer | Total SKS | Est. SKS | Est. no-S3 | #classes | #courses |")
-            lines.append("| --- | ---: | ---: | ---: | ---: | ---: |")
+            lines.append(
+                "| Lecturer | Scheduled SKS | Est. SKS | SKS S1 | SKS S2 | SKS S3 | "
+                "SKS Profesi | #classes | #courses |"
+            )
+            lines.append("| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |")
             for r in rows:
                 lines.append(
-                    f"| {r['dosen']} | {r['total_sks']:g} | {r['est_sks']:g} | "
-                    f"{r['est_sks_no_s3']:g} | {r['n_classes']} | {r['n_courses']} |"
+                    f"| {r['dosen']} | {r['scheduled_sks']:g} | {r['est_sks']:g} | "
+                    f"{r['sks_s1']:g} | {r['sks_s2']:g} | {r['sks_s3']:g} | {r['sks_profesi']:g} | "
+                    f"{r['n_classes']} | {r['n_courses']} |"
                 )
         lines.append("")
 
-    lines.append("## By program level")
+    lines.append(
+        "## By program level\n\n"
+        "Total SKS here is the strict credit (fixed/booked schedule only; "
+        "unscheduled classes are exempted, same as `scheduled_sks` above)."
+    )
     level_totals = {lvl: {"n": 0, "sks": 0.0} for lvl in PROGRAM_LEVELS}
     for r in result["classes"]:
         t = level_totals.setdefault(r["level"], {"n": 0, "sks": 0.0})
         t["n"] += 1
-        t["sks"] += r["est_credit"]
-    lines.append("| Level | #classes | Total est. SKS |")
+        t["sks"] += r["own_credit"]
+    lines.append("| Level | #classes | Total SKS |")
     lines.append("| --- | ---: | ---: |")
     for lvl in PROGRAM_LEVELS:
         t = level_totals[lvl]
         lines.append(f"| {lvl} | {t['n']} | {t['sks']:g} |")
+    total_n = sum(t["n"] for t in level_totals.values())
+    total_sks = sum(t["sks"] for t in level_totals.values())
+    lines.append(f"| **TOTAL** | **{total_n}** | **{total_sks:g}** |")
     lines.append("")
 
     lines.append(f"## Warnings ({len(result['warnings'])})")

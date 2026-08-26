@@ -35,31 +35,37 @@ LEVEL_COLORS = {
     "OTHER": "#616a6b",
 }
 
+# Column tuples are (key, label, kind), where kind is "text" (left-aligned,
+# shown as-is), "num" (centered, shown as-is) or "sks" (centered, rounded to
+# 1 decimal for display -- the underlying data keeps full precision for
+# sorting/filtering).
 LECTURER_COLUMNS = [
-    ("dosen", "Lecturer"),
-    ("total_sks", "Total SKS"),
-    ("est_sks", "Est. SKS"),
-    ("est_sks_no_s3", "Est. (no S3)"),
-    ("n_classes", "#Classes"),
-    ("n_courses", "#Courses"),
-    ("n_unscheduled", "#Unsched."),
-    ("n_s3", "#S3"),
-    ("status", "Status"),
+    ("dosen", "Lecturer", "text"),
+    ("scheduled_sks", "Scheduled SKS", "sks"),
+    ("est_sks", "Est. SKS", "sks"),
+    ("sks_s1", "SKS S1", "sks"),
+    ("sks_s2", "SKS S2", "sks"),
+    ("sks_s3", "SKS S3", "sks"),
+    ("sks_profesi", "SKS Profesi", "sks"),
+    ("sks_unscheduled", "SKS Unsched.", "sks"),
+    ("n_classes", "#Classes", "num"),
+    ("n_courses", "#Courses", "num"),
+    ("status", "Status", "text"),
 ]
 
 CLASS_COLUMNS = [
-    ("dosen", "Lecturer"),
-    ("kode", "Kode"),
-    ("mata_kuliah", "Mata Kuliah"),
-    ("rumpun", "Rumpun/Prodi"),
-    ("level", "Level"),
-    ("kelas", "Kelas"),
-    ("sks", "SKS"),
-    ("class_meetings", "Meetings"),
-    ("own_meetings", "Own"),
-    ("own_credit", "Credit"),
-    ("est_credit", "Est."),
-    ("is_s3", "S3"),
+    ("dosen", "Lecturer", "text"),
+    ("kode", "Kode", "text"),
+    ("mata_kuliah", "Mata Kuliah", "text"),
+    ("rumpun", "Rumpun/Prodi", "text"),
+    ("level", "Level", "text"),
+    ("kelas", "Kelas", "text"),
+    ("sks", "SKS", "sks"),
+    ("class_meetings", "Meetings", "num"),
+    ("own_meetings", "Own", "num"),
+    ("own_credit", "Credit", "sks"),
+    ("est_credit", "Est.", "sks"),
+    ("is_s3", "S3", "text"),
 ]
 
 
@@ -86,17 +92,29 @@ def _level_css() -> str:
 
 
 def _level_cards(result: dict) -> str:
-    counts = {level: 0 for level in PROGRAM_LEVELS}
+    # Total SKS per level is the strict credit (own_credit): only classes
+    # with a fixed/booked schedule count, same as the lecturers' scheduled_sks.
+    totals = {level: {"n": 0, "sks": 0.0} for level in PROGRAM_LEVELS}
     for row in result["classes"]:
-        counts[row["level"]] = counts.get(row["level"], 0) + 1
+        t = totals.setdefault(row["level"], {"n": 0, "sks": 0.0})
+        t["n"] += 1
+        t["sks"] += row["own_credit"]
     cards = []
     for level in PROGRAM_LEVELS:
+        t = totals[level]
         cards.append(
             f'<div class="card level-{level}" '
             f'onclick="classFilterInput.value=\'{level}\';classTable.render();">'
-            f'<div class="card-count">{counts[level]}</div>'
-            f'<div class="card-label">{_e(level)}</div></div>'
+            f'<div class="card-count">{t["n"]}</div>'
+            f'<div class="card-label">{_e(level)} &middot; {t["sks"]:g} SKS</div></div>'
         )
+    total_n = sum(t["n"] for t in totals.values())
+    total_sks = sum(t["sks"] for t in totals.values())
+    cards.append(
+        '<div class="card" onclick="classFilterInput.value=\'\';classTable.render();">'
+        f'<div class="card-count">{total_n}</div>'
+        f'<div class="card-label">TOTAL &middot; {total_sks:g} SKS</div></div>'
+    )
     return "\n".join(cards)
 
 
@@ -138,17 +156,25 @@ def render_dashboard(result: dict) -> str:
     max_sks = result.get("max_sks", 16.0)
     generated = datetime.now().isoformat(timespec="seconds")
 
-    lecturer_cols_json = _json_for_script([key for key, _ in LECTURER_COLUMNS])
-    class_cols_json = _json_for_script([key for key, _ in CLASS_COLUMNS])
+    lecturer_cols_json = _json_for_script([key for key, _, _ in LECTURER_COLUMNS])
+    class_cols_json = _json_for_script([key for key, _, _ in CLASS_COLUMNS])
+    lecturer_centered_json = _json_for_script(
+        [key for key, _, kind in LECTURER_COLUMNS if kind in ("num", "sks")]
+    )
+    class_centered_json = _json_for_script(
+        [key for key, _, kind in CLASS_COLUMNS if kind in ("num", "sks")]
+    )
+    lecturer_sks_json = _json_for_script([key for key, _, kind in LECTURER_COLUMNS if kind == "sks"])
+    class_sks_json = _json_for_script([key for key, _, kind in CLASS_COLUMNS if kind == "sks"])
     lecturers_json = _json_for_script(result["lecturers"])
     classes_json = _json_for_script(result["classes"])
 
-    lecturer_headers = "\n".join(
-        f'<th data-key="{key}">{_e(label)}</th>' for key, label in LECTURER_COLUMNS
-    )
-    class_headers = "\n".join(
-        f'<th data-key="{key}">{_e(label)}</th>' for key, label in CLASS_COLUMNS
-    )
+    def _th(key, label, kind):
+        cls = ' class="num"' if kind in ("num", "sks") else ""
+        return f'<th data-key="{key}"{cls}>{_e(label)}</th>'
+
+    lecturer_headers = "\n".join(_th(key, label, kind) for key, label, kind in LECTURER_COLUMNS)
+    class_headers = "\n".join(_th(key, label, kind) for key, label, kind in CLASS_COLUMNS)
 
     return f"""<!doctype html>
 <html lang="en">
@@ -218,6 +244,7 @@ input[type="search"] {{
 }}
 .filter-count {{ color: var(--muted); font-size: 0.85rem; margin-left: 0.5rem; }}
 table {{ border-collapse: collapse; width: 100%; font-size: 0.9rem; }}
+.num {{ text-align: center; }}
 thead th {{
   position: sticky;
   top: 0;
@@ -308,12 +335,19 @@ const LECTURERS = {lecturers_json};
 const CLASSES = {classes_json};
 const LECTURER_COLUMNS = {lecturer_cols_json};
 const CLASS_COLUMNS = {class_cols_json};
+const LECTURER_CENTERED = {lecturer_centered_json};
+const CLASS_CENTERED = {class_centered_json};
+const LECTURER_SKS = {lecturer_sks_json};
+const CLASS_SKS = {class_sks_json};
 
 const filterInput = document.getElementById("filter");
 const classFilterInput = document.getElementById("class-filter");
 
 function makeTable(opts) {{
-  const {{ data, columns, tbody, filterInput, countEl, defaultKey, rowClass, onRowClick }} = opts;
+  const {{
+    data, columns, tbody, filterInput, countEl, defaultKey, rowClass, onRowClick,
+    centeredColumns = [], sksColumns = [],
+  }} = opts;
   const state = {{ key: defaultKey, dir: -1 }};
 
   function matches(row, q) {{
@@ -348,7 +382,8 @@ function makeTable(opts) {{
           span.textContent = r[key];
           td.appendChild(span);
         }} else {{
-          td.textContent = r[key];
+          td.textContent = sksColumns.includes(key) ? Number(r[key]).toFixed(1) : r[key];
+          if (centeredColumns.includes(key)) td.className = "num";
         }}
         tr.appendChild(td);
       }}
@@ -366,9 +401,11 @@ const lecturerTable = makeTable({{
   tbody: document.querySelector("#lecturer-table tbody"),
   filterInput: filterInput,
   countEl: document.getElementById("filter-count"),
-  defaultKey: "total_sks",
+  defaultKey: "scheduled_sks",
   rowClass: r => "status-" + r.status + " lecturer-row",
   onRowClick: r => {{ classFilterInput.value = r.dosen; classTable.render(); }},
+  centeredColumns: LECTURER_CENTERED,
+  sksColumns: LECTURER_SKS,
 }});
 
 const classTable = makeTable({{
@@ -379,6 +416,8 @@ const classTable = makeTable({{
   countEl: document.getElementById("class-filter-count"),
   defaultKey: "dosen",
   rowClass: r => "level-" + r.level,
+  centeredColumns: CLASS_CENTERED,
+  sksColumns: CLASS_SKS,
 }});
 
 function wireSort(tableId, table) {{
