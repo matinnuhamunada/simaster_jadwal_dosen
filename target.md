@@ -64,7 +64,7 @@ Arief Muammar, S.Si., M.Sc.
 # --- Sistematika Hewan ---
 Dr. Rury Eprilurahman, S.Si. M.Sc.
 Donan Satria Yudha, S.Si., M.Sc.
-Dr. Dra. Rr. Upiek Ngesti W.A., B.Sc., DAP&E, M.Biomed
+Dr. Raden Roro Upiek Ngesti Wibawaning Astuti, DAP&E, B.Sc., M.Biomed.
 Dr. Dila Hening Windyarini, S.Si., M.Sc.
 Dr. Dwi Sendi Priyono S.Si., M.Si.
 Dr. Aprilia Sufi Subiastuti S.Si.

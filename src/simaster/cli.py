@@ -5,13 +5,25 @@ from __future__ import annotations
 import argparse
 import sys
 
+import json
+from difflib import SequenceMatcher
+from pathlib import Path
+
 from . import __version__
 from .batch import read_lecturers
 from .clean import clean_all
 from .dashboard import write_dashboard
-from .load import aggregate_loads, write_reports
+from .ics import write_ics
+from .load import _matches, aggregate_loads, write_reports
 from .output import verify_lecturer_output, write_outputs
+from .parse import _fold
 from .scraper import Scraper, SEMESTER, build_meta
+
+# Similarity floor for the ics fuzzy name fallback (see _select_by_name).
+# Real name variants (a missing/extra title, a typo) score >= 0.85 against
+# the right person; a lecturer with no scraped file at all tops out <= 0.65
+# against an unrelated one. 0.75 sits in the gap between those two clusters.
+ICS_FUZZY_THRESHOLD = 0.75
 
 
 def _scrape_parser() -> argparse.ArgumentParser:
@@ -167,6 +179,45 @@ def _dashboard_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _ics_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="simaster ics",
+        description="Export a lecturer's schedule as a .ics calendar file (import into Google Calendar).",
+    )
+    parser.add_argument(
+        "--lecturer",
+        action="append",
+        default=[],
+        metavar="NAME",
+        help="lecturer name to export, matched fuzzily against meta.dosen "
+        "(repeatable). Omit both this and --names to export everyone found "
+        "in --dir.",
+    )
+    parser.add_argument(
+        "--names",
+        action="append",
+        default=[],
+        metavar="FILE",
+        help="text file with one lecturer name per line (blank/# lines ignored).",
+    )
+    parser.add_argument(
+        "--dir",
+        default="data",
+        help="directory holding jadwal_*_<semester>.json files (default: data).",
+    )
+    parser.add_argument(
+        "--semester", default=SEMESTER, help=f"semester code (default: {SEMESTER})."
+    )
+    parser.add_argument(
+        "--outdir", default=".", help="output directory (default: current directory)."
+    )
+    parser.add_argument(
+        "--version", action="version", version=f"%(prog)s {__version__}"
+    )
+    parser.set_defaults(ics=True)
+    return parser
+
+
 def _clean_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="simaster clean",
@@ -204,6 +255,8 @@ def parse_args(argv=None) -> argparse.Namespace:
         return _dashboard_parser().parse_args(argv[1:])
     if argv and argv[0] == "clean":
         return _clean_parser().parse_args(argv[1:])
+    if argv and argv[0] == "ics":
+        return _ics_parser().parse_args(argv[1:])
     return _scrape_parser().parse_args(argv)
 
 
@@ -322,6 +375,107 @@ def run_dashboard(args) -> int:
     return 0
 
 
+def _select_by_name(name, entries):
+    """Match ``name`` against each ``(path, data)``'s ``meta.dosen``.
+
+    Tries an exact/substring match first (via ``load._matches``); if that
+    finds nothing, falls back to a whole-string similarity ratio — the same
+    ``difflib.SequenceMatcher`` approach ``parse.best_match`` uses to resolve
+    a scraped lecturer to SIMASTER's canonical name — since a human-typed
+    roster commonly differs from meta.dosen by more than a clean prefix/
+    suffix (a wrong title like "Dra." for "Dr.", a dropped "S.Si." in the
+    middle, an abbreviated given name). Returns ``(matches, ratio, closest)``:
+    substring match(es) -> ``(matches, None, None)``; fuzzy match at or above
+    ``ICS_FUZZY_THRESHOLD`` -> ``([match], ratio, None)``; no match ->
+    ``([], None, closest_dosen_seen)`` for a "did you mean" hint.
+    """
+    exact = [
+        (path, data)
+        for path, data in entries
+        if _matches(name, data.get("meta", {}).get("dosen", ""))
+    ]
+    if exact:
+        return exact, None, None
+
+    folded = _fold(name)
+    scored = sorted(
+        (
+            (
+                SequenceMatcher(None, folded, _fold(data.get("meta", {}).get("dosen", ""))).ratio(),
+                path,
+                data,
+            )
+            for path, data in entries
+        ),
+        key=lambda t: t[0],
+        reverse=True,
+    )
+    if not scored:
+        return [], None, None
+    ratio, path, data = scored[0]
+    if ratio >= ICS_FUZZY_THRESHOLD:
+        return [(path, data)], ratio, None
+    return [], None, data.get("meta", {}).get("dosen", "")
+
+
+def run_ics(args) -> int:
+    """Export .ics files for the requested lecturers, or every lecturer found.
+
+    Selection is by fuzzy name match against each file's ``meta.dosen`` (see
+    ``_select_by_name``) rather than by reconstructing the filename from the
+    given name: the slug baked into a filename comes from whatever search
+    name was used at scrape time, which can diverge from meta.dosen. With
+    neither --lecturer nor --names given, every jadwal_*_<semester>.json
+    file in --dir is exported (same default-to-everyone convention as
+    `dashboard`/`analyze`).
+    """
+    names = list(args.lecturer)
+    for f in args.names:
+        names.extend(read_lecturers(f))
+    names = _dedupe(names)
+
+    directory = Path(args.dir)
+    entries = [
+        (path, json.loads(path.read_text(encoding="utf-8")))
+        for path in sorted(directory.glob(f"jadwal_*_{args.semester}.json"))
+    ]
+    if not entries:
+        print(
+            f"error: no jadwal_*_{args.semester}.json files found in {directory}",
+            file=sys.stderr,
+        )
+        return 2
+
+    failures = 0
+    if names:
+        selected = []
+        for name in names:
+            found, ratio, closest = _select_by_name(name, entries)
+            if not found:
+                hint = f" (closest on file: '{closest}')" if closest else ""
+                print(
+                    f"[ics] ERROR for '{name}': no schedule file matches in {directory}{hint}",
+                    file=sys.stderr,
+                )
+                failures += 1
+                continue
+            if ratio is not None:
+                print(
+                    f"[ics] '{name}' matched '{found[0][1]['meta'].get('dosen', '')}' "
+                    f"({ratio:.0%} similar name)"
+                )
+            selected.extend(found)
+    else:
+        selected = entries
+
+    for path, data in selected:
+        out_path, n_events, n_skipped = write_ics(
+            data.get("meta", {}), data.get("courses") or [], args.outdir
+        )
+        print(f"[ics] wrote {out_path} ({n_events} events, {n_skipped} skipped)")
+    return 1 if failures else 0
+
+
 def run_clean(args) -> int:
     names = read_lecturers(args.names) if args.names else []
     result = clean_all(args.dir, args.semester, names, outdir=args.outdir)
@@ -342,6 +496,8 @@ def main(argv=None) -> int:
         return run_dashboard(args)
     if getattr(args, "clean", False):
         return run_clean(args)
+    if getattr(args, "ics", False):
+        return run_ics(args)
 
     names = list(args.lecturer)
     for f in args.names:

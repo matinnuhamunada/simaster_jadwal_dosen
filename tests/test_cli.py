@@ -161,6 +161,42 @@ class TestCleanArgs:
         assert getattr(args, "analyze", False) is False
 
 
+class TestIcsArgs:
+    def test_ics_dispatch(self):
+        args = parse_args(["ics", "--lecturer", "A"])
+        assert args.ics is True
+        assert args.dir == "data"
+        assert args.semester == "20261"
+        assert args.outdir == "."
+        assert args.lecturer == ["A"]
+        assert args.names == []
+
+    def test_ics_options(self):
+        args = parse_args(
+            [
+                "ics",
+                "--lecturer",
+                "A",
+                "--names",
+                "target.md",
+                "--dir",
+                "data/clean",
+                "--semester",
+                "20251",
+                "--outdir",
+                "out",
+            ]
+        )
+        assert args.dir == "data/clean"
+        assert args.semester == "20251"
+        assert args.outdir == "out"
+        assert args.names == ["target.md"]
+
+    def test_scrape_not_ics(self):
+        args = parse_args(["--lecturer", "A"])
+        assert getattr(args, "ics", False) is False
+
+
 class TestMainAnalyze:
     def test_runs_analyze_offline(self, tmp_path, capsys):
         course = {
@@ -221,6 +257,145 @@ class TestMainDashboard:
         assert "<!doctype html>" in content.lower()
         assert "Matin Nuhamunada" in content
         assert "wrote" in capsys.readouterr().out
+
+
+class TestMainIcs:
+    def test_fuzzy_matches_name_with_missing_middle_title(self, tmp_path, capsys):
+        (tmp_path / "jadwal_a_20261.json").write_text(
+            json.dumps(
+                {
+                    "meta": {"semester": "20261", "dosen": "Budi Santoso, S.Si., M.Sc."},
+                    "courses": [],
+                }
+            ),
+            encoding="utf-8",
+        )
+        out = tmp_path / "out"
+        rc = main(
+            [
+                "ics",
+                "--lecturer",
+                "Budi Santoso, M.Sc.",
+                "--dir",
+                str(tmp_path),
+                "--semester",
+                "20261",
+                "--outdir",
+                str(out),
+            ]
+        )
+        assert rc == 0
+        assert (out / "jadwal_budi_santoso_s_si_m_sc_20261.ics").exists()
+        assert "matched 'Budi Santoso, S.Si., M.Sc.'" in capsys.readouterr().out
+
+    def test_unrelated_name_stays_a_failure_with_hint(self, tmp_path, capsys):
+        (tmp_path / "jadwal_a_20261.json").write_text(
+            json.dumps(
+                {
+                    "meta": {"semester": "20261", "dosen": "Budi Santoso, S.Si., M.Sc."},
+                    "courses": [],
+                }
+            ),
+            encoding="utf-8",
+        )
+        rc = main(
+            ["ics", "--lecturer", "Completely Different Person", "--dir", str(tmp_path)]
+        )
+        assert rc == 1
+        err = capsys.readouterr().err
+        assert "ERROR" in err
+        assert "closest on file" in err
+
+    def test_runs_ics_offline(self, tmp_path, capsys):
+        course = {
+            "kode": "K1",
+            "mata_kuliah": "Genetika",
+            "kelas": "A",
+            "sks": "2.00",
+            "rumpun": "[PRODI] S1 BIOLOGI",
+            "jadwal": [
+                {
+                    "hari": "Jumat",
+                    "tanggal": "2026-08-21",
+                    "jam": "07:15-08:55",
+                    "ruang": "Ruang 1",
+                    "dosen": "Matin Nuhamunada, S.Si., M.Sc.",
+                }
+            ],
+        }
+        (tmp_path / "jadwal_matin_nuhamunada_s_si_m_sc_20261.json").write_text(
+            json.dumps(
+                {
+                    "meta": {
+                        "semester": "20261",
+                        "dosen": "Matin Nuhamunada, S.Si., M.Sc.",
+                        "dosenId": "16764",
+                    },
+                    "courses": [course],
+                }
+            ),
+            encoding="utf-8",
+        )
+        out = tmp_path / "out"
+        rc = main(
+            [
+                "ics",
+                "--lecturer",
+                "Matin Nuhamunada, S.Si., M.Sc.",
+                "--dir",
+                str(tmp_path),
+                "--semester",
+                "20261",
+                "--outdir",
+                str(out),
+            ]
+        )
+        assert rc == 0
+        ics_path = out / "jadwal_matin_nuhamunada_s_si_m_sc_20261.ics"
+        assert ics_path.exists()
+        content = ics_path.read_text(encoding="utf-8")
+        assert "BEGIN:VCALENDAR" in content
+        assert "SUMMARY:K1 Genetika (A)" in content
+        assert "1 events" in capsys.readouterr().out
+
+    def test_missing_schedule_file_is_a_failure(self, tmp_path, capsys):
+        (tmp_path / "jadwal_someone_else_20261.json").write_text(
+            json.dumps(
+                {
+                    "meta": {"semester": "20261", "dosen": "Someone Else, M.Sc."},
+                    "courses": [],
+                }
+            ),
+            encoding="utf-8",
+        )
+        rc = main(
+            ["ics", "--lecturer", "Nobody", "--dir", str(tmp_path), "--outdir", str(tmp_path)]
+        )
+        assert rc == 1
+        assert "ERROR" in capsys.readouterr().err
+
+    def test_no_files_found_returns_2(self, tmp_path, capsys):
+        rc = main(["ics", "--dir", str(tmp_path), "--outdir", str(tmp_path)])
+        assert rc == 2
+        assert "no jadwal_" in capsys.readouterr().err
+
+    def test_no_filter_exports_everyone_in_dir(self, tmp_path, capsys):
+        for slug, dosen in [
+            ("a", "Lecturer A, M.Sc."),
+            ("b", "Lecturer B, Ph.D."),
+        ]:
+            (tmp_path / f"jadwal_{slug}_20261.json").write_text(
+                json.dumps(
+                    {"meta": {"semester": "20261", "dosen": dosen}, "courses": []}
+                ),
+                encoding="utf-8",
+            )
+        out = tmp_path / "out"
+        rc = main(["ics", "--dir", str(tmp_path), "--semester", "20261", "--outdir", str(out)])
+        assert rc == 0
+        assert (out / "jadwal_lecturer_a_m_sc_20261.ics").exists()
+        assert (out / "jadwal_lecturer_b_ph_d_20261.ics").exists()
+        assert capsys.readouterr().out.count("[ics] wrote") == 2
 
 
 class FakeScraper:

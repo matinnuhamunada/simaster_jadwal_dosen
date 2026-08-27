@@ -217,6 +217,47 @@ table (clicking a lecturer row filters the class table to their classes). The
 file has inline CSS/JS and no external assets or network calls, so it's safe
 to email or open from a USB stick.
 
+### Export a calendar file
+
+Write one `.ics` calendar file per lecturer, with one event per class session
+(day/date/time/room), that can be imported into Google Calendar (Settings →
+Import) or any other calendar app:
+
+```bash
+conda run -n simaster simaster ics --lecturer "Matin Nuhamunada, S.Si., M.Sc." \
+    --dir data/clean --semester 20261 --outdir results
+```
+
+Takes the same `--lecturer NAME` (repeatable) / `--names FILE` (repeatable) /
+`--semester` options as the scrape command, plus `--dir` / `--outdir` like
+`analyze`/`dashboard`. A given name is matched against each file's `meta.dosen`,
+not reconstructed into an exact filename, so it doesn't need to match character
+for character: an exact/substring match (tolerant of a missing/extra "Ph.D.")
+is tried first, and when that finds nothing a whole-name similarity match
+kicks in (same `difflib` approach used to resolve names during scraping),
+which catches things like a dropped "S.Si." in the middle, an abbreviated
+given name, or a wrong title ("Dra." vs "Dr."). A fuzzy hit is printed as
+`'<given>' matched '<meta.dosen>' (NN% similar name)` so you can see what it
+resolved to; a name with no good candidate stays a reported failure, with the
+closest name on file shown as a hint in case `--names` needs fixing — it's
+never silently dropped or guessed past that point. **Omit both `--lecturer`
+and `--names` to export every lecturer found in `--dir`** — the simplest way
+to generate calendars in bulk (no name matching needed at all, since it just
+processes every file):
+
+```bash
+conda run -n simaster simaster ics --dir data/clean --semester 20261 --outdir results
+```
+
+Only the lecturer's own sessions are included (co-teacher sessions on shared
+classes are filtered out), and unscheduled classes (no booked meetings) are
+skipped since they have no date/time to put on a calendar. WIB (Asia/Jakarta)
+times are converted to UTC in the file, so they'll show at the correct local
+time regardless of the importing calendar's timezone. Writes
+`jadwal_<slug>_<semester>.ics` into `--outdir`; re-running with the same data
+produces the same event IDs, so re-importing updates existing events instead of
+duplicating them.
+
 ### CLI reference
 
 ```
@@ -231,6 +272,10 @@ simaster dashboard --dir DIR --semester SEMESTER [--warn WARN] [--min MIN]
                    [--max MAX] [--names FILE] [--outdir DIR]
 
 simaster clean --dir DIR --semester SEMESTER --names FILE [--outdir DIR]
+
+simaster ics [--lecturer NAME]... [--names FILE]... --dir DIR --semester SEMESTER
+             [--outdir DIR]
+             (omit --lecturer/--names to export every lecturer found in --dir)
 ```
 
 | Flag | Meaning |
@@ -251,6 +296,8 @@ simaster clean --dir DIR --semester SEMESTER --names FILE [--outdir DIR]
 | `dashboard --min` | Lower edge of the ideal OK band (default `8`). |
 | `dashboard --max` | Overload limit (default `16`). |
 | `dashboard --warn` | Below this teaching SKS is a WARNING (default `6`). |
+| `ics --dir` | Directory holding `jadwal_*.json` results (use `data/clean/` for own-sessions-only, or `data/` — co-teacher entries are filtered either way). |
+| `ics --outdir` | Output directory for the `.ics` file (default `.`). |
 
 Provide at least one `--lecturer` or `--names`. Names are deduplicated, and all
 lecturers share one Chrome session. Per-lecturer failures (e.g. an unresolvable
