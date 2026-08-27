@@ -95,6 +95,34 @@ class TestRenderDashboard:
         out = render_dashboard(result)
         assert "</html>" in out
 
+    def test_methodology_present_with_interpolated_bands(self, tmp_path):
+        _write_fixture(tmp_path, "Matin Nuhamunada, S.Si., M.Sc.")
+        result = aggregate_loads(tmp_path, "20261", 8, 16, warn=6)
+        out = render_dashboard(result)
+        assert "Methodology" in out
+        assert "Scheduled SKS" in out
+        # band cutoffs (warn=6, ok_min=8, ok_high=12, max_sks=16) interpolated as prose
+        assert "below 6" in out
+        assert "12" in out and "16" in out
+
+    def test_section_captions_present(self, tmp_path):
+        _write_fixture(tmp_path, "Matin Nuhamunada, S.Si., M.Sc.")
+        result = aggregate_loads(tmp_path, "20261", 8, 16)
+        out = render_dashboard(result)
+        assert "Click a name to filter" in out
+        assert "Click a tile to filter" in out
+        assert "co-taught class" in out
+        assert "make-up class" in out
+
+    def test_captions_are_escaped_static_text(self, tmp_path):
+        # Captions are developer-authored constants (no user data), but should
+        # still render as plain text outside <script>, same as other static copy.
+        _write_fixture(tmp_path, "Matin Nuhamunada, S.Si., M.Sc.")
+        result = aggregate_loads(tmp_path, "20261", 8, 16)
+        out = render_dashboard(result)
+        without_scripts = re.sub(r"<script>.*?</script>", "", out, flags=re.S)
+        assert "Ranked by Scheduled SKS" in without_scripts
+
 
 class TestWriteDashboard:
     def test_writes_single_html_file(self, tmp_path):

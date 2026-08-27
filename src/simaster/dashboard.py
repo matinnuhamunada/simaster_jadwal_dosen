@@ -12,28 +12,41 @@ import json
 from datetime import datetime
 from pathlib import Path
 
-from .load import OK_HIGH_SKS, PROGRAM_LEVELS, WARN_SKS
+from .load import (
+    MEETING_WARN_MAX,
+    MEETING_WARN_MIN,
+    MEETINGS_PER_SEMESTER,
+    OK_HIGH_SKS,
+    PROGRAM_LEVELS,
+    WARN_SKS,
+)
 
 DASHBOARD_FILENAME = "load_dashboard.html"
 
 STATUS_ORDER = ["OVERLOADED", "ABOVE", "OK", "UNDERLOADED", "WARNING", "NO_DATA"]
 
+# A muted, print-report palette rather than flat-UI brights: status still
+# maps 1:1 to the six bands, but a text label always accompanies the color
+# (badges, card labels), so hue proximity within a family (e.g. the two reds)
+# is a cosmetic risk, not a legibility one.
 STATUS_COLORS = {
-    "OVERLOADED": "#c0392b",
-    "ABOVE": "#d68910",
-    "OK": "#1e8449",
-    "UNDERLOADED": "#b7950b",
-    "WARNING": "#e74c3c",
-    "NO_DATA": "#607d8b",
+    "OVERLOADED": "#9c3b30",  # brick red
+    "ABOVE": "#b07a2e",       # ochre/amber
+    "OK": "#3f6b4a",          # forest green
+    "UNDERLOADED": "#8a7a2e", # olive/mustard
+    "WARNING": "#8c2f2f",     # deep maroon
+    "NO_DATA": "#7a746a",     # warm gray
 }
 
 LEVEL_COLORS = {
-    "S1": "#2874a6",
-    "S2": "#6c3483",
-    "S3": "#117864",
-    "PROFESI": "#935116",
-    "OTHER": "#616a6b",
+    "S1": "#2b4a73",   # steel navy
+    "S2": "#5c3a5c",   # plum
+    "S3": "#2f6b63",   # teal
+    "PROFESI": "#8a4a2c",  # rust
+    "OTHER": "#6b6357",    # warm gray-brown
 }
+
+ACCENT = "#13294b"  # masthead navy
 
 # Column tuples are (key, label, kind), where kind is "text" (left-aligned,
 # shown as-is), "num" (centered, shown as-is) or "sks" (centered, rounded to
@@ -67,6 +80,27 @@ CLASS_COLUMNS = [
     ("est_credit", "Est.", "sks"),
     ("is_s3", "S3", "text"),
 ]
+
+LECTURERS_CAPTION = (
+    "Ranked by Scheduled SKS &mdash; the credit already booked on a room and "
+    "time slot this semester. Click a name to filter the class list below to "
+    "that lecturer; click any column heading to sort."
+)
+LEVELS_CAPTION = (
+    "Class sessions grouped by program level, detected from each course's "
+    "rumpun tag. Click a tile to filter the class list to that level."
+)
+CLASSES_CAPTION = (
+    "Every class session by lecturer &mdash; for a co-taught class, only that "
+    "lecturer's own sessions are counted. Sortable and filterable like the "
+    "table above."
+)
+WARNINGS_CAPTION = (
+    "Classes whose booked meeting count falls outside the expected "
+    f"{MEETING_WARN_MIN}&ndash;{MEETING_WARN_MAX} sessions per semester "
+    "&mdash; often a make-up class, a mid-semester schedule change, or an "
+    "incomplete booking."
+)
 
 
 def _e(v) -> str:
@@ -124,7 +158,7 @@ def _stat_cards(result: dict) -> str:
         counts[row["status"]] = counts.get(row["status"], 0) + 1
 
     cards = [
-        f'<div class="card" data-status="" onclick="filterInput.value=\'\';renderLecturers();">'
+        f'<div class="card" data-status="" onclick="filterInput.value=\'\';lecturerTable.render();">'
         f'<div class="card-count">{len(result["lecturers"])}</div>'
         f'<div class="card-label">Total lecturers</div></div>',
         f'<div class="card" data-status="" onclick="document.getElementById(\'warnings\').scrollIntoView();">'
@@ -134,7 +168,7 @@ def _stat_cards(result: dict) -> str:
     for status in STATUS_ORDER:
         cards.append(
             f'<div class="card status-{status}" '
-            f'onclick="filterInput.value=\'{status}\';renderLecturers();">'
+            f'onclick="filterInput.value=\'{status}\';lecturerTable.render();">'
             f'<div class="card-count">{counts[status]}</div>'
             f'<div class="card-label">{_e(status)}</div></div>'
         )
@@ -145,6 +179,37 @@ def _warnings_html(warnings: list[str]) -> str:
     if not warnings:
         return "<li><em>none</em></li>"
     return "\n".join(f"<li>{_e(w)}</li>" for w in warnings)
+
+
+def _methodology_html(warn: float, ok_min: float, ok_high: float, max_sks: float) -> str:
+    """A short prose explainer for how the numbers/bands in this report are derived."""
+    return f"""
+<p>This report counts each lecturer's <strong>own class sessions only</strong>:
+on a co-taught class, credit belongs to whichever lecturer actually leads a
+given session, so shared classes are never double-counted.</p>
+<p><strong>Scheduled SKS</strong> is the credit already booked on a room and
+time slot this semester &mdash; each class contributes its course credit
+(SKS) scaled by the share of the semester's {MEETINGS_PER_SEMESTER} meetings
+the lecturer actually teaches, and a class with no booked schedule yet
+contributes nothing. <strong>Est. SKS</strong> closes that gap by adding the
+full course credit for classes still awaiting a schedule, estimating the
+lecturer's eventual load once every class is booked; the difference between
+the two &mdash; shown as <strong>SKS Unsched.</strong> &mdash; is exposure
+still sitting in unscheduled classes.</p>
+<p>Status bands are drawn on Scheduled SKS: below {warn:g} is
+<strong>WARNING</strong>; {warn:g}&ndash;{ok_min:g} is
+<strong>UNDERLOADED</strong>; {ok_min:g}&ndash;{ok_high:g} is
+<strong>OK</strong> &mdash; the ideal <em>teaching-only</em> range, since the
+official {ok_high:g}-SKS minimum load already folds in research;
+{ok_high:g}&ndash;{max_sks:g} is <strong>ABOVE</strong>; and past
+{max_sks:g} is <strong>OVERLOADED</strong>, the hard ceiling that itself
+still has to cover research, community service and supporting duties on top
+of teaching.</p>
+<p>Program level (S1/S2/S3/Profesi) is read from each course's rumpun tag
+(a doctoral course code prefix is also recognized as a fallback); S3 credit
+is broken out on its own since doctoral supervision carries different
+expectations than undergraduate or master's teaching.</p>
+""".strip()
 
 
 def render_dashboard(result: dict) -> str:
@@ -168,6 +233,7 @@ def render_dashboard(result: dict) -> str:
     class_sks_json = _json_for_script([key for key, _, kind in CLASS_COLUMNS if kind == "sks"])
     lecturers_json = _json_for_script(result["lecturers"])
     classes_json = _json_for_script(result["classes"])
+    methodology_html = _methodology_html(warn, ok_min, ok_high, max_sks)
 
     def _th(key, label, kind):
         cls = ' class="num"' if kind in ("num", "sks") else ""
@@ -180,68 +246,150 @@ def render_dashboard(result: dict) -> str:
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>SIMASTER Teaching Load Dashboard - {semester}</title>
+<title>Teaching Load Report &mdash; Semester {semester}</title>
 <style>
 :root {{
-  --bg: #f5f6f8;
-  --panel: #ffffff;
-  --text: #1c2226;
-  --muted: #5b6570;
-  --border: #dfe3e7;
+  --bg: #f7f5f0;
+  --panel: #fffdf9;
+  --text: #1a1a1a;
+  --muted: #5c5750;
+  --border: #ddd8cd;
+  --accent: {ACCENT};
 }}
 * {{ box-sizing: border-box; }}
 body {{
   margin: 0;
-  padding: 1.5rem;
+  padding: 2rem 1.5rem;
   background: var(--bg);
   color: var(--text);
-  font-family: -apple-system, "Segoe UI", Roboto, sans-serif;
+  font-family: -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
+  line-height: 1.5;
 }}
 .container {{ max-width: 1200px; margin: 0 auto; }}
-header h1 {{ margin: 0 0 0.25rem; }}
-header .meta {{ color: var(--muted); margin: 0 0 1.5rem; }}
+header {{ border-bottom: 2px solid var(--accent); padding-bottom: 1rem; margin-bottom: 1.5rem; }}
+header .kicker {{
+  margin: 0 0 0.4rem;
+  color: var(--accent);
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}}
+header h1 {{
+  margin: 0 0 0.4rem;
+  font-family: Georgia, Cambria, "Times New Roman", serif;
+  font-size: 2.1rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}}
+header .dek {{
+  margin: 0;
+  color: var(--muted);
+  font-family: Georgia, Cambria, "Times New Roman", serif;
+  font-style: italic;
+  font-size: 1.05rem;
+}}
+h2 {{
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
+  margin: 0 0 0.35rem;
+  font-family: Georgia, Cambria, "Times New Roman", serif;
+  font-size: 1.3rem;
+  font-weight: 700;
+}}
+.exhibit-tag {{
+  font-family: -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--accent);
+  white-space: nowrap;
+}}
+.caption {{
+  margin: 0 0 0.9rem;
+  color: var(--muted);
+  font-size: 0.88rem;
+  max-width: 62ch;
+}}
 .stat-cards {{
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
-  gap: 0.75rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
   margin-bottom: 1.5rem;
+  padding: 0.9rem 0;
 }}
 .card {{
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-left: 4px solid var(--muted);
-  border-radius: 6px;
-  padding: 0.75rem 1rem;
+  background: transparent;
+  border: none;
+  border-right: 1px solid var(--border);
+  border-radius: 0;
+  padding: 0 1.25rem;
   cursor: pointer;
+  flex: 1 1 130px;
+  text-align: center;
 }}
-.card.status-OVERLOADED, .card.status-ABOVE, .card.status-OK,
-.card.status-UNDERLOADED, .card.status-WARNING, .card.status-NO_DATA {{
-  border-left-color: var(--status-color);
+.card:last-child {{ border-right: none; }}
+.card-count {{
+  font-family: Georgia, Cambria, "Times New Roman", serif;
+  font-size: 1.9rem;
+  font-weight: 700;
+  line-height: 1;
 }}
-.card.level-S1, .card.level-S2, .card.level-S3,
-.card.level-PROFESI, .card.level-OTHER {{
-  border-left-color: var(--level-color);
+.card.status-OVERLOADED .card-count, .card.status-ABOVE .card-count,
+.card.status-OK .card-count, .card.status-UNDERLOADED .card-count,
+.card.status-WARNING .card-count, .card.status-NO_DATA .card-count {{
+  color: var(--status-color);
 }}
-.card-count {{ font-size: 1.6rem; font-weight: 700; }}
-.card-label {{ color: var(--muted); font-size: 0.85rem; }}
+.card.level-S1 .card-count, .card.level-S2 .card-count, .card.level-S3 .card-count,
+.card.level-PROFESI .card-count, .card.level-OTHER .card-count {{
+  color: var(--level-color);
+}}
+.card-label {{
+  margin-top: 0.35rem;
+  color: var(--muted);
+  font-size: 0.72rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}}
 section {{
   background: var(--panel);
   border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 1rem 1.25rem;
+  border-radius: 2px;
+  padding: 1.25rem 1.5rem;
   margin-bottom: 1.5rem;
   overflow-x: auto;
 }}
-section h2 {{ margin-top: 0; }}
+section.methodology {{
+  border: none;
+  border-left: 3px solid var(--accent);
+  border-radius: 0;
+  background: transparent;
+  padding: 0.1rem 0 0.1rem 1.5rem;
+}}
+section.methodology p {{
+  font-family: Georgia, Cambria, "Times New Roman", serif;
+  font-size: 1.02rem;
+  line-height: 1.65;
+  margin: 0 0 0.9rem;
+}}
+section.methodology p:last-child {{ margin-bottom: 0; }}
 input[type="search"] {{
+  display: block;
   width: 100%;
-  max-width: 320px;
-  padding: 0.4rem 0.6rem;
-  border: 1px solid var(--border);
-  border-radius: 4px;
+  max-width: 340px;
+  padding: 0.4rem 0.1rem;
+  border: none;
+  border-bottom: 1px solid var(--text);
+  border-radius: 0;
+  background: transparent;
   font-size: 0.95rem;
   margin-bottom: 0.75rem;
 }}
+input[type="search"]:focus {{ outline: none; border-bottom: 2px solid var(--accent); }}
 .filter-count {{ color: var(--muted); font-size: 0.85rem; margin-left: 0.5rem; }}
 table {{ border-collapse: collapse; width: 100%; font-size: 0.9rem; }}
 .num {{ text-align: center; }}
@@ -250,28 +398,38 @@ thead th {{
   top: 0;
   background: var(--panel);
   text-align: left;
-  border-bottom: 2px solid var(--border);
-  padding: 0.4rem 0.6rem;
+  border-top: 1px solid var(--text);
+  border-bottom: 1px solid var(--text);
+  padding: 0.45rem 0.6rem;
   cursor: pointer;
   white-space: nowrap;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--muted);
 }}
-tbody td {{ padding: 0.35rem 0.6rem; border-bottom: 1px solid var(--border); }}
-tbody tr:nth-child(even) {{ background: rgba(0,0,0,0.02); }}
+tbody td {{ padding: 0.4rem 0.6rem; border-bottom: 1px solid var(--border); }}
 tbody tr.lecturer-row {{ cursor: pointer; }}
-tbody tr[class*="status-"] td:first-child {{ border-left: 3px solid var(--status-color); }}
-tbody tr[class*="level-"] td:first-child {{ border-left: 3px solid var(--level-color); }}
 {_status_css()}
 {_level_css()}
 .badge {{
-  display: inline-block;
-  padding: 0.1rem 0.5rem;
-  border-radius: 10px;
-  font-size: 0.8rem;
-  color: #fff;
-  background: var(--status-color);
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.85rem;
 }}
-.badge.level-S1, .badge.level-S2, .badge.level-S3,
-.badge.level-PROFESI, .badge.level-OTHER {{
+.badge::before {{
+  content: "";
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--status-color);
+  flex: 0 0 auto;
+}}
+.badge.level-S1::before, .badge.level-S2::before, .badge.level-S3::before,
+.badge.level-PROFESI::before, .badge.level-OTHER::before {{
   background: var(--level-color);
 }}
 #warnings-list {{ margin: 0; padding-left: 1.25rem; }}
@@ -280,19 +438,23 @@ tbody tr[class*="level-"] td:first-child {{ border-left: 3px solid var(--level-c
 <body>
 <div class="container">
 <header>
-  <h1>Teaching Load Dashboard</h1>
-  <p class="meta">Semester {semester} &middot; generated {generated} &middot;
-    bands: WARNING &lt; {warn:g}, UNDERLOADED {warn:g}-{ok_min:g},
-    OK {ok_min:g}-{ok_high:g}, ABOVE {ok_high:g}-{max_sks:g},
-    OVERLOADED &gt; {max_sks:g}</p>
+  <p class="kicker">Fakultas Biologi UGM &middot; SIMASTER</p>
+  <h1>Teaching Load Report</h1>
+  <p class="dek">Semester {semester} &middot; generated {generated}</p>
 </header>
 
 <section class="stat-cards">
 {_stat_cards(result)}
 </section>
 
+<section class="methodology">
+  <h2>Methodology</h2>
+  {methodology_html}
+</section>
+
 <section id="lecturers">
-  <h2>Lecturers</h2>
+  <h2><span class="exhibit-tag">Exhibit 1</span> Lecturers</h2>
+  <p class="caption">{LECTURERS_CAPTION}</p>
   <input id="filter" type="search" placeholder="Filter by lecturer or status...">
   <span id="filter-count" class="filter-count"></span>
   <table id="lecturer-table">
@@ -304,14 +466,16 @@ tbody tr[class*="level-"] td:first-child {{ border-left: 3px solid var(--level-c
 </section>
 
 <section id="levels">
-  <h2>By program level</h2>
+  <h2><span class="exhibit-tag">Exhibit 2</span> By program level</h2>
+  <p class="caption">{LEVELS_CAPTION}</p>
   <div class="stat-cards">
 {_level_cards(result)}
   </div>
 </section>
 
 <section id="classes">
-  <h2>Per-class detail</h2>
+  <h2><span class="exhibit-tag">Exhibit 3</span> Per-class detail</h2>
+  <p class="caption">{CLASSES_CAPTION}</p>
   <input id="class-filter" type="search" placeholder="Filter classes (lecturer, kode, rumpun, level...)">
   <span id="class-filter-count" class="filter-count"></span>
   <table id="class-table">
@@ -323,7 +487,8 @@ tbody tr[class*="level-"] td:first-child {{ border-left: 3px solid var(--level-c
 </section>
 
 <section id="warnings">
-  <h2>Warnings ({len(result["warnings"])})</h2>
+  <h2><span class="exhibit-tag">Exhibit 4</span> Warnings ({len(result["warnings"])})</h2>
+  <p class="caption">{WARNINGS_CAPTION}</p>
   <ul id="warnings-list">
 {_warnings_html(result["warnings"])}
   </ul>
@@ -343,12 +508,12 @@ const CLASS_SKS = {class_sks_json};
 const filterInput = document.getElementById("filter");
 const classFilterInput = document.getElementById("class-filter");
 
-// Sequential single-hue (blue) heatmap: white at 0 up to a contrast-safe mid
-// step at each column's max, so dark table text stays readable (AA-safe
-// through this endpoint). Scale is fixed per column from the full dataset,
-// not the filtered view, so a cell's shade never shifts as you filter/sort.
+// Sequential single-hue heatmap: white at 0 up to a contrast-safe mid step
+// at each column's max, so dark table text stays readable (AA-safe through
+// this endpoint). Scale is fixed per column from the full dataset, not the
+// filtered view, so a cell's shade never shifts as you filter/sort.
 const HEATMAP_LOW = [255, 255, 255];
-const HEATMAP_HIGH = [85, 152, 231]; // #5598e7
+const HEATMAP_HIGH = [150, 168, 194]; // dusty slate-navy, echoes --accent
 
 function heatmapColor(t) {{
   const c = HEATMAP_LOW.map((lo, i) => Math.round(lo + (HEATMAP_HIGH[i] - lo) * t));
