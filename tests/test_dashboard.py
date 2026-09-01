@@ -1,6 +1,8 @@
 import json
 import re
 
+import pytest
+
 from simaster.dashboard import DASHBOARD_FILENAME, render_dashboard, write_dashboard
 from simaster.load import MEETINGS_PER_SEMESTER, aggregate_loads
 
@@ -110,7 +112,7 @@ class TestRenderDashboard:
         result = aggregate_loads(tmp_path, "20261", 8, 16)
         out = render_dashboard(result)
         assert "Click a name to filter" in out
-        assert "Click a tile to filter" in out
+        assert "Click a level tile to filter" in out
         assert "co-taught class" in out
         assert "make-up class" in out
 
@@ -123,6 +125,79 @@ class TestRenderDashboard:
         without_scripts = re.sub(r"<script>.*?</script>", "", out, flags=re.S)
         assert "Ranked by Scheduled SKS" in without_scripts
 
+    def test_level_bars_present(self, tmp_path):
+        _write_fixture(tmp_path, "Matin Nuhamunada, S.Si., M.Sc.")
+        result = aggregate_loads(tmp_path, "20261", 8, 16)
+        out = render_dashboard(result)
+        assert 'id="level-total-bar"' in out
+        assert 'id="level-bars"' in out
+        assert "By lecturer" in out
+        assert "LEVEL_SKS_FIELDS" in out
+        assert json.dumps("sks_s1") in out
+
+    def test_level_card_totals_match_lecturer_field_sums(self, tmp_path):
+        # _level_cards() sums own_credit over result["classes"]; the new bars
+        # sum sks_s1..sks_profesi over result["lecturers"] client-side. These
+        # are two different computations over the same underlying scheduled
+        # sessions and must agree, or the total bar and the cards would show
+        # different numbers for the same data.
+        courses = [
+            {**COURSE, "kode": "BISB1", "rumpun": "[PRODI] S1 BIOLOGI"},
+            {**COURSE, "kode": "BIMB1", "rumpun": "[PRODI] MAGISTER BIOLOGI"},
+            {**COURSE, "kode": "BIDB1", "rumpun": "[PRODI] DOKTOR BIOLOGI"},
+        ]
+        _write_fixture(tmp_path, "Matin Nuhamunada, S.Si., M.Sc.", courses=courses)
+        result = aggregate_loads(tmp_path, "20261", 8, 16)
+
+        card_totals = {level: 0.0 for level in ["S1", "S2", "S3", "PROFESI", "OTHER"]}
+        for row in result["classes"]:
+            card_totals[row["level"]] += row["own_credit"]
+
+        field_totals = {"S1": 0.0, "S2": 0.0, "S3": 0.0, "PROFESI": 0.0}
+        for row in result["lecturers"]:
+            field_totals["S1"] += row["sks_s1"]
+            field_totals["S2"] += row["sks_s2"]
+            field_totals["S3"] += row["sks_s3"]
+            field_totals["PROFESI"] += row["sks_profesi"]
+
+        for level, total in field_totals.items():
+            assert card_totals[level] == pytest.approx(total, abs=0.01)
+
+    def test_network_omitted_without_network_arg(self, tmp_path):
+        # Backward compatibility: existing render_dashboard(result) callers
+        # (no network kwarg) must keep working and simply omit the exhibit.
+        _write_fixture(tmp_path, "Matin Nuhamunada, S.Si., M.Sc.")
+        result = aggregate_loads(tmp_path, "20261", 8, 16)
+        out = render_dashboard(result)
+        assert "Shared-course network" not in out
+        assert 'id="network-matrix"' not in out
+
+    def test_network_omitted_for_empty_network(self, tmp_path):
+        _write_fixture(tmp_path, "Matin Nuhamunada, S.Si., M.Sc.")
+        result = aggregate_loads(tmp_path, "20261", 8, 16)
+        out = render_dashboard(result, network={"nodes": [], "edges": []})
+        assert "Shared-course network" not in out
+
+    def test_network_exhibit_rendered_when_present(self, tmp_path):
+        _write_fixture(tmp_path, "Matin Nuhamunada, S.Si., M.Sc.")
+        result = aggregate_loads(tmp_path, "20261", 8, 16)
+        network = {
+            "nodes": [
+                {"id": "Alice", "label": "Alice", "count": 3, "level": "S1"},
+                {"id": "Bob", "label": "Bob", "count": 2, "level": "S2"},
+            ],
+            "edges": [{"source": "Alice", "target": "Bob", "weight": 2, "courses": ["A101", "B202"]}],
+        }
+        out = render_dashboard(result, network=network)
+        assert "Shared-course network" in out
+        assert 'id="network-matrix"' in out
+        assert "const NETWORK = " in out
+        assert json.dumps("Alice") in out
+        # Tooltip content is built via innerHTML from JSON-embedded names, so
+        # it must escape before interpolating (a lecturer/course name could
+        # contain HTML metacharacters).
+        assert "function escapeHtml(" in out
+
 
 class TestWriteDashboard:
     def test_writes_single_html_file(self, tmp_path):
@@ -133,6 +208,17 @@ class TestWriteDashboard:
         assert path == out / DASHBOARD_FILENAME
         assert path.exists()
         assert path.read_text(encoding="utf-8").strip().lower().startswith("<!doctype html>")
+
+    def test_forwards_network_to_render(self, tmp_path):
+        _write_fixture(tmp_path, "Matin Nuhamunada, S.Si., M.Sc.")
+        result = aggregate_loads(tmp_path, "20261", 8, 16)
+        network = {
+            "nodes": [{"id": "Alice", "label": "Alice", "count": 1, "level": "S1"}],
+            "edges": [],
+        }
+        out = tmp_path / "out"
+        path = write_dashboard(result, out, network=network)
+        assert "Shared-course network" in path.read_text(encoding="utf-8")
 
     def test_creates_nested_outdir(self, tmp_path):
         result = aggregate_loads(tmp_path, "20261", 8, 16)

@@ -15,6 +15,7 @@ from .clean import clean_all
 from .dashboard import write_dashboard
 from .ics import write_ics
 from .load import _matches, aggregate_loads, write_reports
+from .network import build_network, filter_to_lecturers
 from .output import verify_lecturer_output, write_outputs
 from .parse import _fold
 from .scraper import Scraper, SEMESTER, build_meta
@@ -368,9 +369,15 @@ def run_dashboard(args) -> int:
         warn=args.warn_sks,
         names=names,
     )
-    path = write_dashboard(result, args.outdir)
+    sessions_path = Path(args.dir) / "sessions.csv"
+    network = build_network(sessions_path) if sessions_path.exists() else None
+    if network:
+        network = filter_to_lecturers(network, [r["dosen"] for r in result["lecturers"]])
+    path = write_dashboard(result, args.outdir, network=network)
     print(f"[dashboard] {len(result['lecturers'])} lecturers, "
           f"{len(result['classes'])} class-rows, {len(result['warnings'])} warnings")
+    if network:
+        print(f"[dashboard] network: {len(network['nodes'])} lecturers, {len(network['edges'])} co-teaching links")
     print(f"[dashboard] wrote {path}")
     return 0
 

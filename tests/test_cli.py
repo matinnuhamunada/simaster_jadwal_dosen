@@ -1,3 +1,4 @@
+import csv
 import json
 
 import pytest
@@ -257,6 +258,53 @@ class TestMainDashboard:
         assert "<!doctype html>" in content.lower()
         assert "Matin Nuhamunada" in content
         assert "wrote" in capsys.readouterr().out
+
+    def test_includes_network_when_sessions_csv_present(self, tmp_path, capsys):
+        # Two co-taught courses: Matin/Second Lecturer (both have their own
+        # jadwal_*.json, i.e. both are "listed elsewhere" in the report) and
+        # Matin/Co Teacher (only appears in sessions.csv, never scraped as a
+        # standalone target). The network must keep the first pair's edge and
+        # drop Co Teacher's node/edge entirely.
+        for stem, dosen, dosen_id in [
+            ("matin_nuhamunada_s_si_m_sc", "Matin Nuhamunada, S.Si., M.Sc.", "16764"),
+            ("second_lecturer_m_sc", "Second Lecturer, M.Sc.", "2"),
+        ]:
+            course = {
+                "kode": "K1",
+                "mata_kuliah": "Genetika",
+                "kelas": "A",
+                "sks": "2.00",
+                "jadwal": [{"dosen": dosen}] * 14,
+            }
+            (tmp_path / f"jadwal_{stem}_20261.json").write_text(
+                json.dumps(
+                    {
+                        "meta": {"semester": "20261", "dosen": dosen, "dosenId": dosen_id},
+                        "courses": [course],
+                    }
+                ),
+                encoding="utf-8",
+            )
+        header = ["kode", "mata_kuliah", "kelas", "sks", "jml_mhs", "rumpun", "hari", "tanggal", "jam", "ruang", "dosen"]
+        rows = [
+            ["K1", "Genetika", "A", "2.00", "30", "[PRODI] S1 BIOLOGI", "Senin", "2026-09-02", "09:00-09:50", "R1", "Matin Nuhamunada, S.Si., M.Sc."],
+            ["K1", "Genetika", "A", "2.00", "30", "[PRODI] S1 BIOLOGI", "Senin", "2026-09-02", "09:00-09:50", "R1", "Second Lecturer, M.Sc."],
+            ["K1", "Genetika", "A", "2.00", "30", "[PRODI] S1 BIOLOGI", "Senin", "2026-09-02", "09:00-09:50", "R1", "Co Teacher, M.Sc."],
+        ]
+        with (tmp_path / "sessions.csv").open("w", newline="", encoding="utf-8-sig") as f:
+            w = csv.writer(f)
+            w.writerow(header)
+            w.writerows(rows)
+        out = tmp_path / "out"
+        rc = main(["dashboard", "--dir", str(tmp_path), "--semester", "20261", "--outdir", str(out)])
+        assert rc == 0
+        content = (out / "load_dashboard.html").read_text(encoding="utf-8")
+        assert "Shared-course network" in content
+        assert "Second Lecturer" in content
+        # Co Teacher never got their own jadwal_*.json, so isn't "listed
+        # elsewhere" in this report -- their node/edge must be filtered out.
+        assert "Co Teacher" not in content
+        assert "network: 2 lecturers, 1 co-teaching links" in capsys.readouterr().out
 
 
 class TestMainIcs:

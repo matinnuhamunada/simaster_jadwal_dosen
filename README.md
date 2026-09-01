@@ -102,7 +102,7 @@ Batch scraping from a file (one name per line, blank lines and `#` comments
 ignored):
 
 ```bash
-conda run -n simaster simaster --names target.md
+conda run -n simaster simaster --names target.md --outdir data/raw
 ```
 
 The old hardcoded entry point still works as a thin shim:
@@ -123,7 +123,7 @@ those redundant sessions, and writes a deduplicated per-lecturer dataset into a
 new folder — raw `data/` is never modified:
 
 ```bash
-conda run -n simaster simaster clean --dir data --semester 20261 \
+conda run -n simaster simaster clean --dir data/raw --semester 20261 \
     --names target.md --outdir data/clean
 ```
 
@@ -211,11 +211,24 @@ conda run -n simaster simaster dashboard --dir data/clean --semester 20261 \
 Takes the same `--dir` / `--semester` / `--min` / `--max` / `--warn` /
 `--names` / `--outdir` options as `analyze` (see above for band definitions)
 and writes `load_dashboard.html`: status-colored summary cards, a
-program-level breakdown (S1/S2/S3/PROFESI/OTHER, see above), a
-click-to-sort/filterable lecturers table, and a filterable per-class detail
-table (clicking a lecturer row filters the class table to their classes). The
+program-level breakdown (S1/S2/S3/PROFESI/OTHER, see above) with a
+faculty-wide stacked bar and a per-lecturer stacked-bar list showing exactly
+where each lecturer's SKS load sits across levels, a click-to-sort/filterable
+lecturers table, and a filterable per-class detail table (clicking a lecturer
+row filters the class table to their classes). The
 file has inline CSS/JS and no external assets or network calls, so it's safe
 to email or open from a USB stick.
+
+When `--dir data/clean` is used (the documented invocation above), the
+dashboard also reads `sessions.csv` from that directory and adds a
+shared-course network: one node per lecturer who appears in any class
+session (sized by their number of distinct scheduled courses, including
+co-teachers who were never scraped as a standalone target), with an edge
+between two lecturers for every class section they co-teach together
+(weighted by the number of distinct courses they share). A threshold control
+declutters dense faculty-wide networks, and a search box highlights a
+lecturer and their co-teachers. Pointing `--dir` elsewhere (no `sessions.csv`
+present) simply omits this exhibit.
 
 ### Export a calendar file
 
