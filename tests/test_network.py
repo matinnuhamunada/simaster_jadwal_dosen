@@ -122,6 +122,19 @@ class TestBuildNetwork:
         node = _by_id(build_network(path)["nodes"])["Alice"]
         assert node["level"] == "S1"
 
+    def test_edge_forms_across_different_kelas_of_same_course(self, tmp_path):
+        path = tmp_path / "sessions.csv"
+        rows = [
+            _row("A101", "A", "Alice"),
+            _row("A101", "B", "Bob"),
+        ]
+        _write_sessions(path, rows)
+        edges = build_network(path)["edges"]
+        edge = _edge_between(edges, "Alice", "Bob")
+        assert edge is not None
+        assert edge["weight"] == 1
+        assert edge["courses"] == ["A101"]
+
     def test_node_level_ties_broken_by_program_level_order(self, tmp_path):
         path = tmp_path / "sessions.csv"
         rows = [
@@ -161,6 +174,16 @@ class TestBuildNetworkKelasUnit:
         # ...but two distinct sections (A101/A, A101/B) -> 2 on the kelas one.
         assert kelas_edge["weight"] == 2
         assert kelas_edge["courses"] == ["A101 (A)", "A101 (B)"]
+
+    def test_no_edge_across_different_kelas_of_same_course(self, tmp_path):
+        path = tmp_path / "sessions.csv"
+        rows = [
+            _row("A101", "A", "Alice"),
+            _row("A101", "B", "Bob"),
+        ]
+        _write_sessions(path, rows)
+        edges = build_network(path, unit="kelas")["edges"]
+        assert _edge_between(edges, "Alice", "Bob") is None
 
     def test_invalid_unit_raises(self, tmp_path):
         path = tmp_path / "sessions.csv"

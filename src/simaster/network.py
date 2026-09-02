@@ -41,9 +41,10 @@ def build_network(sessions_path, unit: str = "course") -> dict:
       granularity ``load.py`` uses for ``n_classes`` -- so co-teaching
       several sections of one course counts each section separately.
 
-    Co-teaching itself is always detected at the class-section level (two
-    lecturers must appear on the same ``(kode, kelas)``); ``unit`` only
-    changes how that's tallied into node/edge weights.
+    ``unit`` also decides the granularity at which co-teaching itself is
+    detected: ``"course"`` links two lecturers who share a ``kode`` at all
+    (regardless of ``kelas``); ``"kelas"`` only links them when they share
+    the exact same ``(kode, kelas)`` section.
 
     Node ``level`` is whichever program level accounts for most of a
     lecturer's counted units (ties broken by ``PROGRAM_LEVELS`` order).
@@ -61,7 +62,7 @@ def build_network(sessions_path, unit: str = "course") -> dict:
 
     units_by_dosen: dict[str, set] = defaultdict(set)
     level_counts: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
-    sections: dict[tuple[str, str], set[str]] = defaultdict(set)
+    groups: dict = defaultdict(set)
 
     for row in rows:
         dosen = row["dosen"]
@@ -72,7 +73,7 @@ def build_network(sessions_path, unit: str = "course") -> dict:
             level = program_level({"rumpun": row.get("rumpun", ""), "kode": kode})
             level_counts[dosen][level] += 1
         units_by_dosen[dosen].add(key)
-        sections[(kode, kelas)].add(dosen)
+        groups[key].add(dosen)
 
     nodes = []
     for dosen, units in units_by_dosen.items():
@@ -82,11 +83,10 @@ def build_network(sessions_path, unit: str = "course") -> dict:
     nodes.sort(key=lambda n: n["count"], reverse=True)
 
     pair_units: dict[frozenset, set] = defaultdict(set)
-    for (kode, kelas), dosen_set in sections.items():
+    for key, dosen_set in groups.items():
         if len(dosen_set) < 2:
             continue
         ordered = sorted(dosen_set)
-        key = unit_key(kode, kelas)
         for i in range(len(ordered)):
             for j in range(i + 1, len(ordered)):
                 pair_units[frozenset((ordered[i], ordered[j]))].add(key)

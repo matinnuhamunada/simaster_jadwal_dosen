@@ -236,18 +236,19 @@ would have any events.
 When `--dir data/clean` is used (the documented invocation above), the
 dashboard also reads `sessions.csv` from that directory and adds two
 co-teaching network exhibits (diagram first, then a matrix view of the same
-data), sharing the same underlying data at two granularities: one node per
+data), built from the same underlying data at two granularities: one node per
 lecturer who appears in any class session (including co-teachers who were
 never scraped as a standalone target), sized in the diagram by their total
-scheduled SKS (Exhibit 1), with an edge between two lecturers for every class
-section they co-teach together. The **shared-course network** weighs edges
-(and the matrix threshold) by distinct *courses* shared (two lecturers who
-co-teach several sections of the same course still only count once); the
-**shared-class network** instead weighs them by distinct *class sections*
-(course + kelas), so that case counts separately. Each has its own threshold
-control to declutter dense faculty-wide networks, and a search box to
-highlight a lecturer and their co-teachers. Pointing `--dir` elsewhere (no
-`sessions.csv` present) simply omits both exhibits.
+scheduled SKS (Exhibit 1). The **shared-course network** draws an edge
+between two lecturers whenever they teach the same *course* (`kode`), even
+in different `kelas`, and weighs edges (and the matrix threshold) by distinct
+courses shared. The **shared-class network** only draws an edge when two
+lecturers teach the exact same *class section* (`kode` + `kelas`), and weighs
+edges by distinct sections shared — a narrower relationship than the
+course-level network, not just a reweighting of the same edges. Each has its
+own threshold control to declutter dense faculty-wide networks, and a search
+box to highlight a lecturer and their co-teachers. Pointing `--dir` elsewhere
+(no `sessions.csv` present) simply omits both exhibits.
 
 ### Export a calendar file
 
