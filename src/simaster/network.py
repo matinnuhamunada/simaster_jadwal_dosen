@@ -27,22 +27,39 @@ def _read_sessions(path) -> list[dict]:
         return [row for row in csv.DictReader(f) if row.get("dosen")]
 
 
-def build_network(sessions_path) -> dict:
+def build_network(sessions_path, unit: str = "course") -> dict:
     """Build ``{"nodes": [...], "edges": [...]}`` from a ``sessions.csv`` file.
 
-    Node ``count`` is a lecturer's number of distinct course codes (``kode``)
-    -- the same definition ``load.py`` uses for ``n_courses`` -- and node
-    ``level`` is whichever program level accounts for most of those distinct
-    courses (ties broken by ``PROGRAM_LEVELS`` order). Edge ``weight`` is the
-    number of distinct courses two lecturers co-teach a section of together
-    (not the number of shared session rows, which would inflate weight by a
-    class's meeting count). Returns empty lists if the file is missing/empty.
+    ``unit`` picks what a node's ``count`` and an edge's ``weight`` are
+    measured in:
+
+    - ``"course"`` (default): distinct course codes (``kode``) -- the same
+      definition ``load.py`` uses for ``n_courses`` -- so two lecturers who
+      co-teach several class sections of the very same course still only
+      score 1 on that course.
+    - ``"kelas"``: distinct class sections (``kode`` + ``kelas``) -- the same
+      granularity ``load.py`` uses for ``n_classes`` -- so co-teaching
+      several sections of one course counts each section separately.
+
+    Co-teaching itself is always detected at the class-section level (two
+    lecturers must appear on the same ``(kode, kelas)``); ``unit`` only
+    changes how that's tallied into node/edge weights.
+
+    Node ``level`` is whichever program level accounts for most of a
+    lecturer's counted units (ties broken by ``PROGRAM_LEVELS`` order).
+    Returns empty lists if the file is missing/empty.
     """
+    if unit not in ("course", "kelas"):
+        raise ValueError(f"unknown unit: {unit!r} (expected 'course' or 'kelas')")
+
     rows = _read_sessions(sessions_path)
     if not rows:
         return {"nodes": [], "edges": []}
 
-    courses_by_dosen: dict[str, set[str]] = defaultdict(set)
+    def unit_key(kode, kelas):
+        return kode if unit == "course" else (kode, kelas)
+
+    units_by_dosen: dict[str, set] = defaultdict(set)
     level_counts: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
     sections: dict[tuple[str, str], set[str]] = defaultdict(set)
 
@@ -50,32 +67,38 @@ def build_network(sessions_path) -> dict:
         dosen = row["dosen"]
         kode = row.get("kode", "")
         kelas = row.get("kelas", "")
-        if kode not in courses_by_dosen[dosen]:
+        key = unit_key(kode, kelas)
+        if key not in units_by_dosen[dosen]:
             level = program_level({"rumpun": row.get("rumpun", ""), "kode": kode})
             level_counts[dosen][level] += 1
-        courses_by_dosen[dosen].add(kode)
+        units_by_dosen[dosen].add(key)
         sections[(kode, kelas)].add(dosen)
 
     nodes = []
-    for dosen, courses in courses_by_dosen.items():
+    for dosen, units in units_by_dosen.items():
         counts = level_counts[dosen]
         dominant = min(counts, key=lambda lvl: (-counts[lvl], _LEVEL_RANK.get(lvl, len(PROGRAM_LEVELS))))
-        nodes.append({"id": dosen, "label": dosen, "count": len(courses), "level": dominant})
+        nodes.append({"id": dosen, "label": dosen, "count": len(units), "level": dominant})
     nodes.sort(key=lambda n: n["count"], reverse=True)
 
-    pair_courses: dict[frozenset, set[str]] = defaultdict(set)
-    for (kode, _kelas), dosen_set in sections.items():
+    pair_units: dict[frozenset, set] = defaultdict(set)
+    for (kode, kelas), dosen_set in sections.items():
         if len(dosen_set) < 2:
             continue
         ordered = sorted(dosen_set)
+        key = unit_key(kode, kelas)
         for i in range(len(ordered)):
             for j in range(i + 1, len(ordered)):
-                pair_courses[frozenset((ordered[i], ordered[j]))].add(kode)
+                pair_units[frozenset((ordered[i], ordered[j]))].add(key)
 
     edges = []
-    for pair, shared in pair_courses.items():
+    for pair, shared in pair_units.items():
         a, b = sorted(pair)
-        edges.append({"source": a, "target": b, "weight": len(shared), "courses": sorted(shared)})
+        if unit == "course":
+            items = sorted(shared)
+        else:
+            items = sorted(f"{kode} ({kelas})" if kelas else kode for kode, kelas in shared)
+        edges.append({"source": a, "target": b, "weight": len(shared), "courses": items})
     edges.sort(key=lambda e: e["weight"], reverse=True)
 
     return {"nodes": nodes, "edges": edges}
@@ -97,3 +120,17 @@ def filter_to_lecturers(network: dict, names: list[str]) -> dict:
         e for e in network["edges"] if e["source"] in kept_ids and e["target"] in kept_ids
     ]
     return {"nodes": nodes, "edges": edges}
+
+
+def with_scheduled_sks(network: dict, sks_by_dosen: dict) -> dict:
+    """Return a copy of ``network`` with each node's ``sks`` set from ``sks_by_dosen``.
+
+    ``sks_by_dosen`` is typically ``{row["dosen"]: row["scheduled_sks"] for
+    row in aggregate_loads(...)["lecturers"]}``. Used so the dashboard's
+    network diagram can size nodes by each lecturer's actual total teaching
+    load rather than by how many courses/class-sections they co-teach; a node
+    with no match (shouldn't normally happen after ``filter_to_lecturers``)
+    gets ``0.0``.
+    """
+    nodes = [{**n, "sks": sks_by_dosen.get(n["id"], 0.0)} for n in network["nodes"]]
+    return {"nodes": nodes, "edges": network["edges"]}

@@ -1,5 +1,6 @@
 import csv
 import json
+import re
 
 import pytest
 
@@ -108,6 +109,8 @@ class TestDashboardArgs:
         assert args.warn_sks == 6.0
         assert args.names is None
         assert args.outdir == "."
+        assert args.filename == "index.html"
+        assert args.calendar_dir == "assets/calendar"
 
     def test_dashboard_options(self):
         args = parse_args(
@@ -125,6 +128,10 @@ class TestDashboardArgs:
                 "5",
                 "--outdir",
                 "out",
+                "--filename",
+                "report.html",
+                "--calendar-dir",
+                "ics",
             ]
         )
         assert args.dir == "results"
@@ -133,6 +140,8 @@ class TestDashboardArgs:
         assert args.max_sks == 14.0
         assert args.warn_sks == 5.0
         assert args.outdir == "out"
+        assert args.filename == "report.html"
+        assert args.calendar_dir == "ics"
 
     def test_scrape_not_dashboard(self):
         args = parse_args(["--lecturer", "A"])
@@ -252,7 +261,7 @@ class TestMainDashboard:
         out = tmp_path / "out"
         rc = main(["dashboard", "--dir", str(tmp_path), "--semester", "20261", "--outdir", str(out)])
         assert rc == 0
-        html_path = out / "load_dashboard.html"
+        html_path = out / "index.html"
         assert html_path.exists()
         content = html_path.read_text(encoding="utf-8")
         assert "<!doctype html>" in content.lower()
@@ -298,12 +307,22 @@ class TestMainDashboard:
         out = tmp_path / "out"
         rc = main(["dashboard", "--dir", str(tmp_path), "--semester", "20261", "--outdir", str(out)])
         assert rc == 0
-        content = (out / "load_dashboard.html").read_text(encoding="utf-8")
+        content = (out / "index.html").read_text(encoding="utf-8")
         assert "Shared-course network" in content
+        assert "Shared-class network" in content
         assert "Second Lecturer" in content
         # Co Teacher never got their own jadwal_*.json, so isn't "listed
         # elsewhere" in this report -- their node/edge must be filtered out.
         assert "Co Teacher" not in content
+
+        # Both lecturers taught the same single 14-meeting class solo (no
+        # actual co-teaching this class): each is scheduled for the full 2.0
+        # SKS, and the network nodes must carry that as `sks` for diagram sizing.
+        m = re.search(r"const NETWORK = (\{.*?\});", content)
+        network = json.loads(m.group(1))
+        sks_by_id = {n["id"]: n["sks"] for n in network["nodes"]}
+        assert sks_by_id["Matin Nuhamunada, S.Si., M.Sc."] == 2.0
+        assert sks_by_id["Second Lecturer, M.Sc."] == 2.0
         assert "network: 2 lecturers, 1 co-teaching links" in capsys.readouterr().out
 
 

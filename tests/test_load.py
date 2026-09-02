@@ -85,7 +85,31 @@ class TestComputeLecturerLoad:
         assert load["total_credit"] == 1.5
         assert load["classes"][0]["own_meetings"] == 7
 
-    def test_partial_data_proportional(self):
+    def test_credit_uses_actual_class_meetings_not_a_fixed_semester_length(self):
+        # Regression: a class genuinely co-taught over more than the usual
+        # ~14 sessions (e.g. two lecturers splitting 27 total meetings, 14/13)
+        # must have each co-teacher's share sum to the course's own sks, not
+        # each scored independently against an assumed 14-meeting semester
+        # (which would have over-credited both: 14/14 + 13/14 > 1x sks).
+        courses = [
+            {
+                "kode": "BISB262103",
+                "mata_kuliah": "Biologi Umum",
+                "kelas": "IUP",
+                "sks": "3.00",
+                "class_meetings": 27,
+                "jadwal": [_entry("Prof. Dr. Budi S. Daryono, M.Agr.Sc.")] * 14,
+            }
+        ]
+        load = compute_lecturer_load(courses, "Prof. Dr. Budi S. Daryono, M.Agr.Sc.")
+        assert load["total_credit"] == round(14 / 27 * 3.0, 2)
+        assert load["classes"][0]["est_credit"] == round(14 / 27 * 3.0, 2)
+
+    def test_no_class_meetings_field_falls_back_to_observed_total(self):
+        # Without an explicit class_meetings (e.g. raw/synthetic input), the
+        # only defensible total is however many sessions are actually present
+        # -- there's no co-teacher/session-catalog info to assume a fuller
+        # eventual semester, so 5 out of 5 known meetings is full credit.
         courses = [
             {
                 "kode": "K2",
@@ -96,7 +120,7 @@ class TestComputeLecturerLoad:
             }
         ]
         load = compute_lecturer_load(courses, "Matin Nuhamunada, S.Si., M.Sc.")
-        assert load["total_credit"] == round(5 / 14 * 2.0, 2)
+        assert load["total_credit"] == 2.0
 
     def test_title_variant_matches(self):
         courses = [
@@ -105,6 +129,7 @@ class TestComputeLecturerLoad:
                 "mata_kuliah": "MK",
                 "kelas": "C",
                 "sks": "2.00",
+                "class_meetings": 14,
                 "jadwal": [_entry("Matin Nuhamunada, S.Si., M.Sc., Ph.D.")] * 7,
             }
         ]

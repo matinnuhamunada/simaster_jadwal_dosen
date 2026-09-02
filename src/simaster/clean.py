@@ -14,7 +14,7 @@ import csv
 import json
 from pathlib import Path
 
-from .load import MEETINGS_PER_SEMESTER, _matches, _sks
+from .load import _matches, _sks
 from .parse import _fold, slugify
 
 S3_RUMPUN = "[PRODI] DOKTOR BIOLOGI"
@@ -80,9 +80,11 @@ def clean_lecturer_file(
 ) -> dict:
     """Clean one lecturer's raw JSON: own sessions only + SKS estimation.
 
-    Per class, the estimated credit is ``own_meetings / 14 * sks`` when the
-    class has a schedule, and full ``sks`` when it has no booked meetings.
-    ``est_sks_no_s3`` excludes S3 (DOKTOR BIOLOGI) classes.
+    Per class, the estimated credit is ``own_meetings / total * sks`` (``total``
+    is this class's actual booked session count across every co-teacher, from
+    ``class_meetings``) when the class has a schedule, and full ``sks`` when
+    it has no booked meetings. ``est_sks_no_s3`` excludes S3 (DOKTOR BIOLOGI)
+    classes.
     """
     dosen = meta.get("dosen") or ""
     own_entries = 0
@@ -99,7 +101,7 @@ def clean_lecturer_file(
         own_meetings = len(own)
         total = class_meetings.get((c.get("kode", ""), c.get("kelas", "")), 0)
         s3 = is_s3(c)
-        est = sks if total == 0 else own_meetings / MEETINGS_PER_SEMESTER * sks
+        est = sks if total == 0 else own_meetings / total * sks
         own_entries += own_meetings
         est_sks += est
         if not s3:

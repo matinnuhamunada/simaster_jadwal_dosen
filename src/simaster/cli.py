@@ -12,10 +12,10 @@ from pathlib import Path
 from . import __version__
 from .batch import read_lecturers
 from .clean import clean_all
-from .dashboard import write_dashboard
+from .dashboard import DASHBOARD_FILENAME, DEFAULT_CALENDAR_DIR, write_dashboard
 from .ics import write_ics
 from .load import _matches, aggregate_loads, write_reports
-from .network import build_network, filter_to_lecturers
+from .network import build_network, filter_to_lecturers, with_scheduled_sks
 from .output import verify_lecturer_output, write_outputs
 from .parse import _fold
 from .scraper import Scraper, SEMESTER, build_meta
@@ -172,6 +172,22 @@ def _dashboard_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--outdir", default=".", help="output directory (default: current directory)."
+    )
+    parser.add_argument(
+        "--filename",
+        default=DASHBOARD_FILENAME,
+        help=f"output HTML filename (default: {DASHBOARD_FILENAME}, so the report "
+        "can be dropped straight into a static host/GitHub Pages folder).",
+    )
+    parser.add_argument(
+        "--calendar-dir",
+        dest="calendar_dir",
+        default=DEFAULT_CALENDAR_DIR,
+        metavar="DIR",
+        help="path, relative to the dashboard HTML file once deployed, to each "
+        f"lecturer's .ics file (default: {DEFAULT_CALENDAR_DIR}); used to build "
+        "the per-lecturer Calendar download link. Pass an empty string to omit "
+        "the links (e.g. no .ics files are being published alongside it).",
     )
     parser.add_argument(
         "--version", action="version", version=f"%(prog)s {__version__}"
@@ -370,14 +386,33 @@ def run_dashboard(args) -> int:
         names=names,
     )
     sessions_path = Path(args.dir) / "sessions.csv"
-    network = build_network(sessions_path) if sessions_path.exists() else None
-    if network:
-        network = filter_to_lecturers(network, [r["dosen"] for r in result["lecturers"]])
-    path = write_dashboard(result, args.outdir, network=network)
+    lecturer_names = [r["dosen"] for r in result["lecturers"]]
+    sks_by_dosen = {r["dosen"]: r["scheduled_sks"] for r in result["lecturers"]}
+    network = None
+    class_network = None
+    if sessions_path.exists():
+        network = with_scheduled_sks(
+            filter_to_lecturers(build_network(sessions_path, unit="course"), lecturer_names),
+            sks_by_dosen,
+        )
+        class_network = with_scheduled_sks(
+            filter_to_lecturers(build_network(sessions_path, unit="kelas"), lecturer_names),
+            sks_by_dosen,
+        )
+    path = write_dashboard(
+        result,
+        args.outdir,
+        network=network,
+        class_network=class_network,
+        calendar_dir=args.calendar_dir,
+        filename=args.filename,
+    )
     print(f"[dashboard] {len(result['lecturers'])} lecturers, "
           f"{len(result['classes'])} class-rows, {len(result['warnings'])} warnings")
     if network:
-        print(f"[dashboard] network: {len(network['nodes'])} lecturers, {len(network['edges'])} co-teaching links")
+        print(f"[dashboard] course network: {len(network['nodes'])} lecturers, {len(network['edges'])} co-teaching links")
+    if class_network:
+        print(f"[dashboard] class network: {len(class_network['nodes'])} lecturers, {len(class_network['edges'])} co-teaching links")
     print(f"[dashboard] wrote {path}")
     return 0
 

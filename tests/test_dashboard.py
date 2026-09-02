@@ -91,6 +91,13 @@ class TestRenderDashboard:
         assert '<th data-key="level">Level</th>' in out
         assert json.dumps("[PRODI] MAGISTER BIOLOGI") in out
 
+    def test_per_class_table_has_no_s3_column(self, tmp_path):
+        _write_fixture(tmp_path, "Matin Nuhamunada, S.Si., M.Sc.")
+        result = aggregate_loads(tmp_path, "20261", 8, 16)
+        out = render_dashboard(result)
+        assert '<th data-key="is_s3"' not in out
+        assert ">S3</th>" not in out
+
     def test_empty_result_does_not_crash(self, tmp_path):
         result = aggregate_loads(tmp_path, "20261", 8, 16)
         assert result["lecturers"] == []
@@ -198,6 +205,92 @@ class TestRenderDashboard:
         # contain HTML metacharacters).
         assert "function escapeHtml(" in out
 
+    def test_class_network_omitted_without_arg(self, tmp_path):
+        _write_fixture(tmp_path, "Matin Nuhamunada, S.Si., M.Sc.")
+        result = aggregate_loads(tmp_path, "20261", 8, 16)
+        out = render_dashboard(result)
+        assert "Shared-class network" not in out
+        assert 'id="network-kelas-matrix"' not in out
+
+    def test_class_network_exhibit_rendered_when_present(self, tmp_path):
+        _write_fixture(tmp_path, "Matin Nuhamunada, S.Si., M.Sc.")
+        result = aggregate_loads(tmp_path, "20261", 8, 16)
+        class_network = {
+            "nodes": [
+                {"id": "Alice", "label": "Alice", "count": 3, "level": "S1"},
+                {"id": "Bob", "label": "Bob", "count": 2, "level": "S2"},
+            ],
+            "edges": [{"source": "Alice", "target": "Bob", "weight": 2, "courses": ["A101 (A)", "A101 (B)"]}],
+        }
+        out = render_dashboard(result, class_network=class_network)
+        assert "Shared-class network" in out
+        assert 'id="network-kelas-matrix"' in out
+        assert "const NETWORK_KELAS = " in out
+
+    def test_both_networks_get_distinct_exhibit_numbers(self, tmp_path):
+        _write_fixture(tmp_path, "Matin Nuhamunada, S.Si., M.Sc.")
+        result = aggregate_loads(tmp_path, "20261", 8, 16)
+        network = {
+            "nodes": [{"id": "Alice", "label": "Alice", "count": 1, "level": "S1"}],
+            "edges": [],
+        }
+        out = render_dashboard(result, network=network, class_network=network)
+        assert "Exhibit 4</span> Shared-course network" in out
+        assert "Exhibit 5</span> Shared-class network" in out
+        assert "Exhibit 6</span> Warnings" in out
+
+    def test_calendar_link_uses_default_dir(self, tmp_path):
+        _write_fixture(tmp_path, "Matin Nuhamunada, S.Si., M.Sc.")
+        result = aggregate_loads(tmp_path, "20261", 8, 16)
+        out = render_dashboard(result)
+        assert json.dumps("assets/calendar/jadwal_matin_nuhamunada_s_si_m_sc_20261.ics") in out
+
+    def test_calendar_link_respects_custom_dir(self, tmp_path):
+        _write_fixture(tmp_path, "Matin Nuhamunada, S.Si., M.Sc.")
+        result = aggregate_loads(tmp_path, "20261", 8, 16)
+        out = render_dashboard(result, calendar_dir="ics")
+        assert json.dumps("ics/jadwal_matin_nuhamunada_s_si_m_sc_20261.ics") in out
+
+    def test_calendar_column_omitted_when_dir_is_falsy(self, tmp_path):
+        _write_fixture(tmp_path, "Matin Nuhamunada, S.Si., M.Sc.")
+        result = aggregate_loads(tmp_path, "20261", 8, 16)
+        out = render_dashboard(result, calendar_dir="")
+        assert '"Calendar"' not in out
+        lecturer_cols_line = next(l for l in out.splitlines() if l.startswith("const LECTURER_COLUMNS"))
+        assert "ics" not in json.loads(lecturer_cols_line.split("=", 1)[1].rstrip(";").strip())
+
+    def test_calendar_link_rendered_as_a_button(self, tmp_path):
+        _write_fixture(tmp_path, "Matin Nuhamunada, S.Si., M.Sc.")
+        result = aggregate_loads(tmp_path, "20261", 8, 16)
+        out = render_dashboard(result)
+        assert 'a.className = "ics-btn"' in out
+        assert ".ics-btn {" in out
+
+    def test_diagram_rendered_before_matrix(self, tmp_path):
+        _write_fixture(tmp_path, "Matin Nuhamunada, S.Si., M.Sc.")
+        result = aggregate_loads(tmp_path, "20261", 8, 16)
+        network = {
+            "nodes": [{"id": "Alice", "label": "Alice", "count": 1, "level": "S1", "sks": 4.0}],
+            "edges": [],
+        }
+        out = render_dashboard(result, network=network)
+        assert out.index(">Diagram</h3>") < out.index(">Matrix</h3>")
+
+    def test_network_node_sized_by_scheduled_sks(self, tmp_path):
+        _write_fixture(tmp_path, "Matin Nuhamunada, S.Si., M.Sc.")
+        result = aggregate_loads(tmp_path, "20261", 8, 16)
+        network = {
+            "nodes": [
+                {"id": "Alice", "label": "Alice", "count": 1, "level": "S1", "sks": 12.5},
+                {"id": "Bob", "label": "Bob", "count": 1, "level": "S2", "sks": 2.0},
+            ],
+            "edges": [{"source": "Alice", "target": "Bob", "weight": 1, "courses": ["A101"]}],
+        }
+        out = render_dashboard(result, network=network)
+        assert json.dumps(12.5) in out
+        assert "node.sks" in out
+        assert "scheduled SKS" in out
+
 
 class TestWriteDashboard:
     def test_writes_single_html_file(self, tmp_path):
@@ -225,3 +318,22 @@ class TestWriteDashboard:
         nested = tmp_path / "a" / "b"
         path = write_dashboard(result, nested)
         assert path.exists()
+
+    def test_respects_custom_filename(self, tmp_path):
+        _write_fixture(tmp_path, "Matin Nuhamunada, S.Si., M.Sc.")
+        result = aggregate_loads(tmp_path, "20261", 8, 16)
+        out = tmp_path / "out"
+        path = write_dashboard(result, out, filename="report.html")
+        assert path == out / "report.html"
+        assert path.exists()
+
+    def test_forwards_class_network_to_render(self, tmp_path):
+        _write_fixture(tmp_path, "Matin Nuhamunada, S.Si., M.Sc.")
+        result = aggregate_loads(tmp_path, "20261", 8, 16)
+        class_network = {
+            "nodes": [{"id": "Alice", "label": "Alice", "count": 1, "level": "S1"}],
+            "edges": [],
+        }
+        out = tmp_path / "out"
+        path = write_dashboard(result, out, class_network=class_network)
+        assert "Shared-class network" in path.read_text(encoding="utf-8")

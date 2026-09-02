@@ -128,13 +128,19 @@ def is_s3(course: dict) -> bool:
 def compute_lecturer_load(courses: list[dict], dosen: str) -> dict:
     """Per-class credit for one lecturer.
 
-    Strict credit (``total_credit``) is ``own_meetings/14 * sks``, summed only
-    over classes with a fixed/booked schedule -- a class with no booked
-    meetings contributes 0 and is exempted from it. Estimated credit
-    (``est_sks``) instead treats such an unscheduled class as full ``sks``
-    (the lecturer is assigned) and otherwise equals the strict credit.
-    ``class_meetings`` comes from the clean file when present (fallback: the
-    jadwal length).
+    Strict credit (``total_credit``) is ``own_meetings/class_meetings * sks``,
+    summed only over classes with a fixed/booked schedule -- a class with no
+    booked meetings contributes 0 and is exempted from it. ``class_meetings``
+    is the class's actual total booked session count across *every*
+    co-teacher (from the clean file's per-class field, populated from the
+    faculty-wide session catalog; falls back to this course's own ``jadwal``
+    length when the field is absent, e.g. raw/synthetic input), not a fixed
+    assumed semester length -- a class genuinely co-taught over more or fewer
+    than the usual ~14 sessions (see ``MEETING_WARN_MIN``/``MAX``) must still
+    have its co-teachers' shares sum to the course's ``sks``, not each
+    independently scored against an assumed full semester. Estimated credit
+    (``est_sks``) instead treats an unscheduled class as full ``sks`` (the
+    lecturer is assigned) and otherwise equals the strict credit.
     """
     total = 0.0
     est = 0.0
@@ -146,7 +152,7 @@ def compute_lecturer_load(courses: list[dict], dosen: str) -> dict:
         class_meetings = int(c.get("class_meetings", len(entries)))
         own_meetings = sum(1 for e in entries if _matches(e.get("dosen", ""), dosen))
         sks = _sks(c.get("sks"))
-        own_credit = own_meetings / MEETINGS_PER_SEMESTER * sks
+        own_credit = own_meetings / class_meetings * sks if class_meetings else 0.0
         est_credit = sks if class_meetings == 0 else own_credit
         level = program_level(c)
         total += own_credit

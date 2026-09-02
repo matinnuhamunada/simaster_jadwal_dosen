@@ -20,8 +20,10 @@ from .load import (
     PROGRAM_LEVELS,
     WARN_SKS,
 )
+from .parse import slugify
 
-DASHBOARD_FILENAME = "load_dashboard.html"
+DASHBOARD_FILENAME = "index.html"
+DEFAULT_CALENDAR_DIR = "assets/calendar"
 
 STATUS_ORDER = ["OVERLOADED", "ABOVE", "OK", "UNDERLOADED", "WARNING", "NO_DATA"]
 
@@ -72,6 +74,11 @@ LECTURER_COLUMNS = [
     ("status", "Status", "text"),
 ]
 
+# Appended to LECTURER_COLUMNS only when a calendar dir is configured (see
+# render_dashboard's `calendar_dir`) -- the raw href/label pair the
+# JS table renderer special-cases to draw a download link instead of text.
+ICS_COLUMN = ("ics", "Calendar", "text")
+
 CLASS_COLUMNS = [
     ("dosen", "Lecturer", "text"),
     ("kode", "Kode", "text"),
@@ -84,7 +91,6 @@ CLASS_COLUMNS = [
     ("own_meetings", "Own", "num"),
     ("own_credit", "Credit", "sks"),
     ("est_credit", "Est.", "sks"),
-    ("is_s3", "S3", "text"),
 ]
 
 # (LECTURERS field, level label) -- the four SKS fields that partition
@@ -134,9 +140,19 @@ NETWORK_CAPTION = (
     "search to highlight a lecturer, and click a lecturer's name (matrix) or "
     "node (diagram) to filter Exhibit 1 to them."
 )
+NETWORK_KELAS_CAPTION = (
+    "The same co-teaching relationships as the network above, but weighted "
+    "by distinct <strong>class sections</strong> (course + kelas) shared "
+    "rather than distinct courses &mdash; so two lecturers who co-teach "
+    "several sections of the very same course score higher here than in the "
+    "course-level view, where that pair would only ever count once. Same "
+    "matrix/diagram views, threshold, search and click-to-filter behavior as "
+    "above."
+)
 NETWORK_DIAGRAM_CAPTION = (
-    "A fixed layout, not a running simulation &mdash; positions are computed "
-    "once with generous spacing so nodes don't crowd each other, then held "
+    "Node size is each lecturer's total scheduled SKS (Exhibit 1). A fixed "
+    "layout, not a running simulation &mdash; positions are computed once "
+    "with generous spacing so nodes don't crowd each other, then held "
     "still. Drag a node to see its neighborhood pull free of the rest of the "
     "graph; release it and it springs back to its regular spot."
 )
@@ -279,53 +295,87 @@ def _network_legend_html() -> str:
     )
 
 
-def _network_section(network: dict | None) -> str:
+def _network_section(
+    network: dict | None,
+    *,
+    id_prefix: str,
+    exhibit_num: int,
+    title: str,
+    caption: str,
+    unit_label: str,
+) -> str:
+    """Render one network exhibit (matrix + diagram).
+
+    ``id_prefix`` distinguishes multiple network exhibits on the same page
+    (e.g. the course-level network uses ``""`` -- so its element ids match
+    this dashboard's original, pre-multi-network markup -- and the
+    class-section-level one uses ``"kelas"``); ``unit_label`` (singular,
+    e.g. "course"/"class section") drives the threshold control's wording,
+    with the matching plural/tooltip wording handled client-side.
+    """
     if not network or not network["nodes"]:
         return ""
+    suffix = f"-{id_prefix}" if id_prefix else ""
     return f"""
-<section id="network">
-  <h2><span class="exhibit-tag">Exhibit 4</span> Shared-course network</h2>
-  <p class="caption">{NETWORK_CAPTION}</p>
+<section id="network{suffix}">
+  <h2><span class="exhibit-tag">Exhibit {exhibit_num}</span> {title}</h2>
+  <p class="caption">{caption}</p>
   <div class="network-controls">
-    <input id="network-filter" type="search" placeholder="Highlight a lecturer and their co-teachers...">
-    <label for="network-min-weight">Min. shared courses:
-      <select id="network-min-weight">
+    <input id="network{suffix}-filter" type="search" placeholder="Highlight a lecturer and their co-teachers...">
+    <label for="network{suffix}-min-weight">Min. shared {unit_label}s:
+      <select id="network{suffix}-min-weight">
         <option value="1">1+</option>
         <option value="2" selected>2+</option>
         <option value="3">3+</option>
         <option value="5">5+</option>
       </select>
     </label>
-    <span id="network-count" class="filter-count"></span>
+    <span id="network{suffix}-count" class="filter-count"></span>
   </div>
   <div class="network-legend">{_network_legend_html()}</div>
   <div class="network-body">
-    <h3 class="subhead">Matrix</h3>
-    <div class="matrix-scroll">
-      <table id="network-matrix">
-        <thead><tr id="network-matrix-head"></tr></thead>
-        <tbody id="network-matrix-body"></tbody>
-      </table>
-    </div>
-
     <h3 class="subhead">Diagram</h3>
     <p class="caption">{NETWORK_DIAGRAM_CAPTION}</p>
     <div class="network-diagram-canvas">
-      <svg id="network-svg" viewBox="0 0 960 700" xmlns="http://www.w3.org/2000/svg"></svg>
+      <svg id="network{suffix}-svg" class="network-svg" viewBox="0 0 960 700" xmlns="http://www.w3.org/2000/svg"></svg>
     </div>
 
-    <div id="network-tooltip" class="network-tooltip" hidden></div>
+    <h3 class="subhead">Matrix</h3>
+    <div class="matrix-scroll">
+      <table id="network{suffix}-matrix" class="network-matrix">
+        <thead><tr id="network{suffix}-matrix-head"></tr></thead>
+        <tbody id="network{suffix}-matrix-body"></tbody>
+      </table>
+    </div>
+
+    <div id="network{suffix}-tooltip" class="network-tooltip" hidden></div>
   </div>
 </section>
 """
 
 
-def render_dashboard(result: dict, network: dict | None = None) -> str:
+def _ics_href(calendar_dir: str, dosen: str, semester: str) -> str:
+    return f"{calendar_dir.rstrip('/')}/jadwal_{slugify(dosen)}_{semester}.ics"
+
+
+def render_dashboard(
+    result: dict,
+    network: dict | None = None,
+    class_network: dict | None = None,
+    calendar_dir: str | None = DEFAULT_CALENDAR_DIR,
+) -> str:
     """Render the full aggregate_loads() result into one HTML document.
 
-    ``network`` is the optional ``network.build_network()`` result; when
-    omitted (or empty), the co-teaching network exhibit is left out of the
-    page entirely rather than rendered empty.
+    ``network`` (course-level) and ``class_network`` (class-section-level)
+    are the optional ``network.build_network()`` results -- see its ``unit``
+    parameter; each is independently left out of the page when omitted or
+    empty rather than rendered empty.
+
+    ``calendar_dir``, when truthy, adds a per-lecturer "Calendar" column
+    linking to ``{calendar_dir}/jadwal_<slug>_<semester>.ics`` -- the same
+    filename ``ics.write_ics`` produces -- a path relative to wherever this
+    HTML file itself is deployed. Pass ``None``/``""`` to omit the column
+    (e.g. when no .ics files are being published alongside the dashboard).
     """
     semester = _e(result.get("semester", ""))
     warn = result.get("warn_sks", WARN_SKS)
@@ -334,28 +384,64 @@ def render_dashboard(result: dict, network: dict | None = None) -> str:
     max_sks = result.get("max_sks", 16.0)
     generated = datetime.now().isoformat(timespec="seconds")
 
-    lecturer_cols_json = _json_for_script([key for key, _, _ in LECTURER_COLUMNS])
+    lecturer_columns = list(LECTURER_COLUMNS)
+    lecturers = result["lecturers"]
+    if calendar_dir:
+        lecturer_columns.append(ICS_COLUMN)
+        raw_semester = result.get("semester", "")
+        lecturers = [
+            {**row, "ics": _ics_href(calendar_dir, row["dosen"], raw_semester)}
+            for row in lecturers
+        ]
+
+    lecturer_cols_json = _json_for_script([key for key, _, _ in lecturer_columns])
     class_cols_json = _json_for_script([key for key, _, _ in CLASS_COLUMNS])
     lecturer_centered_json = _json_for_script(
-        [key for key, _, kind in LECTURER_COLUMNS if kind in ("num", "sks")]
+        [key for key, _, kind in lecturer_columns if kind in ("num", "sks")]
     )
     class_centered_json = _json_for_script(
         [key for key, _, kind in CLASS_COLUMNS if kind in ("num", "sks")]
     )
-    lecturer_sks_json = _json_for_script([key for key, _, kind in LECTURER_COLUMNS if kind == "sks"])
+    lecturer_sks_json = _json_for_script([key for key, _, kind in lecturer_columns if kind == "sks"])
     class_sks_json = _json_for_script([key for key, _, kind in CLASS_COLUMNS if kind == "sks"])
-    lecturers_json = _json_for_script(result["lecturers"])
+    lecturers_json = _json_for_script(lecturers)
     classes_json = _json_for_script(result["classes"])
     level_sks_fields_json = _json_for_script(LEVEL_SKS_FIELDS)
     network_json = _json_for_script(network if network else {"nodes": [], "edges": []})
-    network_section = _network_section(network)
+    class_network_json = _json_for_script(class_network if class_network else {"nodes": [], "edges": []})
+
+    exhibit_n = 4
+    course_network_section = ""
+    class_network_section = ""
+    if network and network["nodes"]:
+        course_network_section = _network_section(
+            network,
+            id_prefix="",
+            exhibit_num=exhibit_n,
+            title="Shared-course network",
+            caption=NETWORK_CAPTION,
+            unit_label="course",
+        )
+        exhibit_n += 1
+    if class_network and class_network["nodes"]:
+        class_network_section = _network_section(
+            class_network,
+            id_prefix="kelas",
+            exhibit_num=exhibit_n,
+            title="Shared-class network",
+            caption=NETWORK_KELAS_CAPTION,
+            unit_label="class section",
+        )
+        exhibit_n += 1
+    network_section = course_network_section + class_network_section
+    warnings_exhibit_n = exhibit_n
     methodology_html = _methodology_html(warn, ok_min, ok_high, max_sks)
 
     def _th(key, label, kind):
         cls = ' class="num"' if kind in ("num", "sks") else ""
         return f'<th data-key="{key}"{cls}>{_e(label)}</th>'
 
-    lecturer_headers = "\n".join(_th(key, label, kind) for key, label, kind in LECTURER_COLUMNS)
+    lecturer_headers = "\n".join(_th(key, label, kind) for key, label, kind in lecturer_columns)
     class_headers = "\n".join(_th(key, label, kind) for key, label, kind in CLASS_COLUMNS)
 
     return f"""<!doctype html>
@@ -656,6 +742,24 @@ h3.subhead {{
   cursor: pointer;
 }}
 .show-more-btn:hover {{ background: var(--accent); color: #fff; }}
+.ics-btn {{
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.2rem 0.55rem;
+  border: 1px solid var(--accent);
+  border-radius: 3px;
+  background: transparent;
+  color: var(--accent);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  text-decoration: none;
+  white-space: nowrap;
+  cursor: pointer;
+}}
+.ics-btn:hover {{ background: var(--accent); color: #fff; }}
 .network-controls {{
   display: flex;
   flex-wrap: wrap;
@@ -689,14 +793,14 @@ h3.subhead {{
   border: 1px solid var(--border);
   background: var(--panel);
 }}
-#network-matrix {{
+.network-matrix {{
   border-collapse: collapse;
   table-layout: fixed;
   width: auto;
   font-size: 0.68rem;
 }}
-#network-matrix th, #network-matrix td {{ padding: 0; border: 1px solid var(--bg); }}
-#network-matrix thead th {{
+.network-matrix th, .network-matrix td {{ padding: 0; border: 1px solid var(--bg); }}
+.network-matrix thead th {{
   position: sticky;
   top: 0;
   background: var(--panel);
@@ -704,8 +808,8 @@ h3.subhead {{
   cursor: default;
   z-index: 2;
 }}
-#network-matrix th.corner {{ position: sticky; left: 0; z-index: 3; width: 220px; }}
-#network-matrix th.col-head {{
+.network-matrix th.corner {{ position: sticky; left: 0; z-index: 3; width: 220px; }}
+.network-matrix th.col-head {{
   writing-mode: vertical-rl;
   transform: rotate(180deg);
   width: 15px;
@@ -720,7 +824,7 @@ h3.subhead {{
   padding-bottom: 0.3rem;
   vertical-align: bottom;
 }}
-#network-matrix th.row-head {{
+.network-matrix th.row-head {{
   position: sticky;
   left: 0;
   background: var(--panel);
@@ -735,22 +839,22 @@ h3.subhead {{
   cursor: pointer;
   z-index: 1;
 }}
-#network-matrix th.row-head.highlight, #network-matrix th.col-head.highlight {{
+.network-matrix th.row-head.highlight, .network-matrix th.col-head.highlight {{
   color: var(--accent);
   font-weight: 700;
 }}
-#network-matrix td.cell {{ width: 15px; height: 15px; }}
-#network-matrix td.cell.diagonal {{ background: var(--border); }}
-#network-matrix td.cell.has-edge {{ cursor: pointer; }}
-#network-matrix td.cell.dimmed {{ opacity: 0.15; }}
+.network-matrix td.cell {{ width: 15px; height: 15px; }}
+.network-matrix td.cell.diagonal {{ background: var(--border); }}
+.network-matrix td.cell.has-edge {{ cursor: pointer; }}
+.network-matrix td.cell.dimmed {{ opacity: 0.15; }}
 .network-diagram-canvas {{ position: relative; }}
-#network-svg {{
+.network-svg {{
   width: 100%;
   height: auto;
   background: var(--panel);
   border: 1px solid var(--border);
 }}
-#network-svg circle.node-dot {{
+.network-svg circle.node-dot {{
   fill: var(--level-color);
   stroke: var(--panel);
   stroke-width: 1px;
@@ -759,13 +863,13 @@ h3.subhead {{
   opacity: 0.9;
   transition: opacity 0.15s ease;
 }}
-#network-svg circle.node-dot:active {{ cursor: grabbing; }}
-#network-svg line.network-edge {{
+.network-svg circle.node-dot:active {{ cursor: grabbing; }}
+.network-svg line.network-edge {{
   stroke: var(--muted);
   opacity: 0.35;
   transition: opacity 0.15s ease;
 }}
-#network-svg .dimmed {{ opacity: 0.08 !important; }}
+.network-svg .dimmed {{ opacity: 0.08 !important; }}
 .network-tooltip {{
   position: absolute;
   pointer-events: none;
@@ -841,7 +945,7 @@ h3.subhead {{
 </section>
 {network_section}
 <section id="warnings">
-  <h2><span class="exhibit-tag">Exhibit {5 if network_section else 4}</span> Warnings ({len(result["warnings"])})</h2>
+  <h2><span class="exhibit-tag">Exhibit {warnings_exhibit_n}</span> Warnings ({len(result["warnings"])})</h2>
   <p class="caption">{WARNINGS_CAPTION}</p>
   <ul id="warnings-list">
 {_warnings_html(result["warnings"])}
@@ -860,6 +964,7 @@ const LECTURER_SKS = {lecturer_sks_json};
 const CLASS_SKS = {class_sks_json};
 const LEVEL_SKS_FIELDS = {level_sks_fields_json};
 const NETWORK = {network_json};
+const NETWORK_KELAS = {class_network_json};
 
 const filterInput = document.getElementById("filter");
 const classFilterInput = document.getElementById("class-filter");
@@ -931,6 +1036,18 @@ function makeTable(opts) {{
           span.className = "badge " + key + "-" + r[key];
           span.textContent = r[key];
           td.appendChild(span);
+        }} else if (key === "ics") {{
+          if (r.ics && r.status !== "NO_DATA") {{
+            const a = document.createElement("a");
+            a.className = "ics-btn";
+            a.href = r.ics;
+            a.textContent = "⬇ ICS";
+            a.download = "";
+            a.addEventListener("click", evt => evt.stopPropagation());
+            td.appendChild(a);
+          }} else {{
+            td.textContent = "—";
+          }}
         }} else {{
           td.textContent = sksColumns.includes(key) ? Number(r[key]).toFixed(1) : r[key];
           if (centeredColumns.includes(key)) {{
@@ -1246,13 +1363,21 @@ renderLevelBars();
 // grid. Reuses heatmapColor() (the same sequential shading already used for
 // the lecturer/class table cells) for one consistent "shade = magnitude"
 // language across the dashboard.
-function initNetwork() {{
-  const head = document.getElementById("network-matrix-head");
-  const body = document.getElementById("network-matrix-body");
-  if (!head || !body || !NETWORK.nodes.length) return;
+// ``idSuffix`` picks which network's DOM elements to wire up (""  for the
+// course-level network, "-kelas" for the class-section-level one -- see
+// _network_section's matching id scheme); ``data`` is that network's
+// {{nodes, edges}}; ``unitLabel`` (singular, e.g. "course"/"class section")
+// drives this instance's tooltip/title wording.
+function initNetwork(idSuffix, data, unitLabel) {{
+  const head = document.getElementById("network" + idSuffix + "-matrix-head");
+  const body = document.getElementById("network" + idSuffix + "-matrix-body");
+  if (!head || !body || !data.nodes.length) return;
 
-  const tooltip = document.getElementById("network-tooltip");
-  const canvas = document.querySelector(".network-body");
+  const tooltip = document.getElementById("network" + idSuffix + "-tooltip");
+  const canvas = document.querySelector("#network" + idSuffix + " .network-body");
+
+  function unitWord(count) {{ return unitLabel + (count === 1 ? "" : "s"); }}
+  function sharedText(weight) {{ return weight + " shared " + unitWord(weight); }}
 
   // Tooltip content is built from lecturer/course names embedded as JSON
   // data (not markup), so escape before using innerHTML -- same reasoning
@@ -1280,18 +1405,18 @@ function initNetwork() {{
   }}
 
   // Rows/columns are the same lecturer set in the same order -- already
-  // sorted by course count (desc) by build_network(), reused as-is.
-  const nodes = NETWORK.nodes;
+  // sorted by count (desc) by build_network(), reused as-is.
+  const nodes = data.nodes;
   const n = nodes.length;
   const indexById = new Map(nodes.map((node, i) => [node.id, i]));
   const matrix = Array.from({{ length: n }}, () => new Array(n).fill(null));
-  for (const e of NETWORK.edges) {{
+  for (const e of data.edges) {{
     const i = indexById.get(e.source), j = indexById.get(e.target);
     if (i == null || j == null) continue;
     matrix[i][j] = e;
     matrix[j][i] = e; // symmetric: co-teaching has no direction
   }}
-  const maxWeight = NETWORK.edges.reduce((m, e) => Math.max(m, e.weight), 1);
+  const maxWeight = data.edges.reduce((m, e) => Math.max(m, e.weight), 1);
 
   const corner = document.createElement("th");
   corner.className = "corner";
@@ -1300,7 +1425,7 @@ function initNetwork() {{
     const th = document.createElement("th");
     th.className = "col-head";
     th.textContent = node.id;
-    th.title = node.id + " — " + node.count + " course" + (node.count === 1 ? "" : "s");
+    th.title = node.id + " — " + node.count + " " + unitWord(node.count);
     head.appendChild(th);
     return th;
   }});
@@ -1313,7 +1438,7 @@ function initNetwork() {{
     const rowHead = document.createElement("th");
     rowHead.className = "row-head";
     rowHead.textContent = node.id;
-    rowHead.title = node.id + " — " + node.count + " course" + (node.count === 1 ? "" : "s");
+    rowHead.title = node.id + " — " + node.count + " " + unitWord(node.count);
     rowHead.addEventListener("click", () => filterToLecturer(node));
     tr.appendChild(rowHead);
     rowHeadEls.push(rowHead);
@@ -1330,7 +1455,7 @@ function initNetwork() {{
             if (!td.classList.contains("has-edge")) return; // below the current threshold
             showTooltip(evt,
               "<strong>" + escapeHtml(nodes[i].id) + " ↔ " + escapeHtml(nodes[j].id) + "</strong><br>" +
-              edge.weight + " shared course" + (edge.weight === 1 ? "" : "s") + ": " +
+              sharedText(edge.weight) + ": " +
               escapeHtml(edge.courses.join(", ")));
           }});
           td.addEventListener("mouseleave", hideTooltip);
@@ -1352,16 +1477,19 @@ function initNetwork() {{
   // the one node being dragged, never re-simulates the graph, and releasing
   // it springs *that node* back to its resting spot rather than leaving it
   // wherever it was dropped.
-  const svg = document.getElementById("network-svg");
+  const svg = document.getElementById("network" + idSuffix + "-svg");
   const diagramNodeEls = [];
   const diagramEdgeEls = [];
 
   if (svg) {{
     const svgNS = "http://www.w3.org/2000/svg";
     const W = 960, H = 700, PAD = 40;
-    const maxCount = nodes.reduce((m, node) => Math.max(m, node.count), 1);
-    const nodeRadius = c => 5 + Math.sqrt(c / maxCount) * 15;
-    const radiusById = new Map(nodes.map(node => [node.id, nodeRadius(node.count)]));
+    // Sized by scheduled SKS (each lecturer's actual teaching load) rather
+    // than by co-teaching count, so the diagram visually tracks the same
+    // "how loaded is this person" question as Exhibit 1.
+    const maxSks = nodes.reduce((m, node) => Math.max(m, node.sks || 0), 0) || 1;
+    const nodeRadius = sks => 5 + Math.sqrt(Math.max(sks, 0) / maxSks) * 15;
+    const radiusById = new Map(nodes.map(node => [node.id, nodeRadius(node.sks || 0)]));
 
     const home = {{}};
     nodes.forEach((node, i) => {{
@@ -1387,7 +1515,7 @@ function initNetwork() {{
           disp[b.id].x -= dx; disp[b.id].y -= dy;
         }}
       }}
-      for (const e of NETWORK.edges) {{
+      for (const e of data.edges) {{
         const a = home[e.source], b = home[e.target];
         if (!a || !b) continue;
         let dx = a.x - b.x, dy = a.y - b.y;
@@ -1442,7 +1570,7 @@ function initNetwork() {{
     }}));
     const stateById = new Map(diagramStates.map(st => [st.node.id, st]));
 
-    for (const e of NETWORK.edges) {{
+    for (const e of data.edges) {{
       const a = stateById.get(e.source), b = stateById.get(e.target);
       if (!a || !b) continue;
       const line = document.createElementNS(svgNS, "line");
@@ -1452,7 +1580,7 @@ function initNetwork() {{
       line.classList.add("network-edge");
       line.addEventListener("mouseenter", evt => showTooltip(evt,
         "<strong>" + escapeHtml(e.source) + " ↔ " + escapeHtml(e.target) + "</strong><br>" +
-        e.weight + " shared course" + (e.weight === 1 ? "" : "s") + ": " + escapeHtml(e.courses.join(", "))));
+        sharedText(e.weight) + ": " + escapeHtml(e.courses.join(", "))));
       line.addEventListener("mouseleave", hideTooltip);
       svg.appendChild(line);
       const rec = {{ el: line, edge: e, a, b }};
@@ -1476,11 +1604,13 @@ function initNetwork() {{
       circle.setAttribute("r", st.radius);
       circle.classList.add("node-dot", "level-" + st.node.level);
       const title = document.createElementNS(svgNS, "title");
-      title.textContent = st.node.id + " — " + st.node.count + " course" + (st.node.count === 1 ? "" : "s") + " (" + st.node.level + ")";
+      title.textContent = st.node.id + " — " + (st.node.sks || 0).toFixed(1) + " scheduled SKS, " +
+        st.node.count + " " + unitWord(st.node.count) + " (" + st.node.level + ")";
       circle.appendChild(title);
       circle.addEventListener("mouseenter", evt => showTooltip(evt,
-        "<strong>" + escapeHtml(st.node.id) + "</strong><br>" + st.node.count + " scheduled course" +
-        (st.node.count === 1 ? "" : "s") + " · " + escapeHtml(st.node.level)));
+        "<strong>" + escapeHtml(st.node.id) + "</strong><br>" + (st.node.sks || 0).toFixed(1) +
+        " scheduled SKS · " + st.node.count + " " + unitWord(st.node.count) + " · " +
+        escapeHtml(st.node.level)));
       circle.addEventListener("mouseleave", hideTooltip);
       svg.appendChild(circle);
       st.el = circle;
@@ -1563,9 +1693,9 @@ function initNetwork() {{
     }});
   }}
 
-  const minWeightSelect = document.getElementById("network-min-weight");
-  const searchInput = document.getElementById("network-filter");
-  const countEl = document.getElementById("network-count");
+  const minWeightSelect = document.getElementById("network" + idSuffix + "-min-weight");
+  const searchInput = document.getElementById("network" + idSuffix + "-filter");
+  const countEl = document.getElementById("network" + idSuffix + "-count");
 
   function update() {{
     const minWeight = Number(minWeightSelect.value);
@@ -1599,7 +1729,7 @@ function initNetwork() {{
     let diagramMatchedIdx = matchedIdx;
     if (matchedIdx) {{
       diagramMatchedIdx = new Set(matchedIdx);
-      for (const e of NETWORK.edges) {{
+      for (const e of data.edges) {{
         if (e.weight < minWeight) continue;
         const i = indexById.get(e.source), j = indexById.get(e.target);
         if (matchedIdx.has(i)) diagramMatchedIdx.add(j);
@@ -1627,17 +1757,28 @@ function initNetwork() {{
   update();
 }}
 
-initNetwork();
+initNetwork("", NETWORK, "course");
+initNetwork("-kelas", NETWORK_KELAS, "class section");
 </script>
 </body>
 </html>
 """
 
 
-def write_dashboard(result: dict, outdir=".", network: dict | None = None) -> Path:
-    """Write the dashboard HTML to ``outdir/load_dashboard.html``."""
+def write_dashboard(
+    result: dict,
+    outdir=".",
+    network: dict | None = None,
+    class_network: dict | None = None,
+    calendar_dir: str | None = DEFAULT_CALENDAR_DIR,
+    filename: str = DASHBOARD_FILENAME,
+) -> Path:
+    """Write the dashboard HTML to ``outdir/<filename>`` (default: index.html)."""
     outdir = Path(outdir)
     outdir.mkdir(parents=True, exist_ok=True)
-    path = outdir / DASHBOARD_FILENAME
-    path.write_text(render_dashboard(result, network), encoding="utf-8")
+    path = outdir / filename
+    path.write_text(
+        render_dashboard(result, network, class_network, calendar_dir=calendar_dir),
+        encoding="utf-8",
+    )
     return path

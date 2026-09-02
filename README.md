@@ -148,10 +148,14 @@ conda run -n simaster simaster analyze --dir data/clean --semester 20261 \
     --min 12 --max 16 --names target.md --outdir results
 ```
 
-Credit is counted **per class** (`kode` + `kelas`): a full class has **14
-meetings** per semester, and a lecturer's share of a class is
-`(meetings they teach / 14) * sks`. Their total load is the sum over all their
-classes.
+Credit is counted **per class** (`kode` + `kelas`): a lecturer's share of a
+class is `(meetings they teach / total booked meetings for that class) *
+sks`, where the total is the class's actual meeting count across *every*
+co-teacher (typically ~14 for a full semester, but a class genuinely
+co-taught over more or fewer sessions is still split correctly, so
+co-teachers' shares always sum to the course's own `sks` rather than each
+being scored independently against an assumed 14-meeting semester). Their
+total load is the sum over all their classes.
 
 Status is banded from the strict teaching SKS (`scheduled_sks`), defaulting to:
 
@@ -209,26 +213,41 @@ conda run -n simaster simaster dashboard --dir data/clean --semester 20261 \
 ```
 
 Takes the same `--dir` / `--semester` / `--min` / `--max` / `--warn` /
-`--names` / `--outdir` options as `analyze` (see above for band definitions)
-and writes `load_dashboard.html`: status-colored summary cards, a
-program-level breakdown (S1/S2/S3/PROFESI/OTHER, see above) with a
-faculty-wide stacked bar and a per-lecturer stacked-bar list showing exactly
-where each lecturer's SKS load sits across levels, a click-to-sort/filterable
-lecturers table, and a filterable per-class detail table (clicking a lecturer
-row filters the class table to their classes). The
-file has inline CSS/JS and no external assets or network calls, so it's safe
-to email or open from a USB stick.
+`--names` / `--outdir` options as `analyze` (see above for band definitions),
+plus `--filename` (default `index.html`, so the output can be dropped
+straight into a static host or GitHub Pages folder) and `--calendar-dir`
+(below). It writes: status-colored summary cards, a program-level breakdown
+(S1/S2/S3/PROFESI/OTHER, see above) with a faculty-wide stacked bar and a
+per-lecturer stacked-bar list showing exactly where each lecturer's SKS load
+sits across levels, a click-to-sort/filterable lecturers table (with a
+per-lecturer Calendar download link — see `--calendar-dir` below), and a
+filterable per-class detail table (clicking a lecturer row filters the class
+table to their classes). The file has inline CSS/JS and no external assets or
+network calls, so it's safe to email or open from a USB stick.
+
+The lecturers table's **Calendar** column links each lecturer to
+`<calendar-dir>/jadwal_<slug>_<semester>.ics` — the same filename `ics`
+(below) writes — a path relative to wherever the dashboard HTML itself ends
+up deployed. It defaults to `assets/calendar` (pass `--calendar-dir ""` to
+omit the column entirely if you're not publishing `.ics` files alongside the
+dashboard); a lecturer with `NO_DATA` status gets no link since no calendar
+would have any events.
 
 When `--dir data/clean` is used (the documented invocation above), the
-dashboard also reads `sessions.csv` from that directory and adds a
-shared-course network: one node per lecturer who appears in any class
-session (sized by their number of distinct scheduled courses, including
-co-teachers who were never scraped as a standalone target), with an edge
-between two lecturers for every class section they co-teach together
-(weighted by the number of distinct courses they share). A threshold control
-declutters dense faculty-wide networks, and a search box highlights a
-lecturer and their co-teachers. Pointing `--dir` elsewhere (no `sessions.csv`
-present) simply omits this exhibit.
+dashboard also reads `sessions.csv` from that directory and adds two
+co-teaching network exhibits (diagram first, then a matrix view of the same
+data), sharing the same underlying data at two granularities: one node per
+lecturer who appears in any class session (including co-teachers who were
+never scraped as a standalone target), sized in the diagram by their total
+scheduled SKS (Exhibit 1), with an edge between two lecturers for every class
+section they co-teach together. The **shared-course network** weighs edges
+(and the matrix threshold) by distinct *courses* shared (two lecturers who
+co-teach several sections of the same course still only count once); the
+**shared-class network** instead weighs them by distinct *class sections*
+(course + kelas), so that case counts separately. Each has its own threshold
+control to declutter dense faculty-wide networks, and a search box to
+highlight a lecturer and their co-teachers. Pointing `--dir` elsewhere (no
+`sessions.csv` present) simply omits both exhibits.
 
 ### Export a calendar file
 
@@ -238,7 +257,7 @@ Import) or any other calendar app:
 
 ```bash
 conda run -n simaster simaster ics --lecturer "Matin Nuhamunada, S.Si., M.Sc." \
-    --dir data/clean --semester 20261 --outdir results
+    --dir data/clean --semester 20261 --outdir results/assets/calendar
 ```
 
 Takes the same `--lecturer NAME` (repeatable) / `--names FILE` (repeatable) /
@@ -259,7 +278,7 @@ to generate calendars in bulk (no name matching needed at all, since it just
 processes every file):
 
 ```bash
-conda run -n simaster simaster ics --dir data/clean --semester 20261 --outdir results
+conda run -n simaster simaster ics --dir data/clean --semester 20261 --outdir results/assets/calendar
 ```
 
 Only the lecturer's own sessions are included (co-teacher sessions on shared
@@ -270,6 +289,10 @@ time regardless of the importing calendar's timezone. Writes
 `jadwal_<slug>_<semester>.ics` into `--outdir`; re-running with the same data
 produces the same event IDs, so re-importing updates existing events instead of
 duplicating them.
+
+Writing into `results/assets/calendar` (as above) matches `dashboard`'s
+default `--calendar-dir assets/calendar`, so `results/` can be deployed as one
+static folder with the dashboard's Calendar links resolving correctly.
 
 ### CLI reference
 
@@ -283,6 +306,7 @@ simaster analyze --dir DIR --semester SEMESTER [--warn WARN] [--min MIN]
 
 simaster dashboard --dir DIR --semester SEMESTER [--warn WARN] [--min MIN]
                    [--max MAX] [--names FILE] [--outdir DIR]
+                   [--filename NAME] [--calendar-dir DIR]
 
 simaster clean --dir DIR --semester SEMESTER --names FILE [--outdir DIR]
 
@@ -309,6 +333,8 @@ simaster ics [--lecturer NAME]... [--names FILE]... --dir DIR --semester SEMESTE
 | `dashboard --min` | Lower edge of the ideal OK band (default `8`). |
 | `dashboard --max` | Overload limit (default `16`). |
 | `dashboard --warn` | Below this teaching SKS is a WARNING (default `6`). |
+| `dashboard --filename` | Output HTML filename (default `index.html`). |
+| `dashboard --calendar-dir` | Path, relative to the dashboard HTML once deployed, to each lecturer's `.ics` file, used for the Calendar column's links (default `assets/calendar`; pass `""` to omit the links). |
 | `ics --dir` | Directory holding `jadwal_*.json` results (use `data/clean/` for own-sessions-only, or `data/` — co-teacher entries are filtered either way). |
 | `ics --outdir` | Output directory for the `.ics` file (default `.`). |
 
