@@ -135,8 +135,9 @@ Outputs:
   (co-teacher sessions dropped, within-file duplicates removed), 0-meeting
   assigned classes kept, and each course annotated with `class_meetings` /
   `own_meetings`. Meta gains `own_entries` (only the lecturer's own sessions),
-  `est_sks` (scheduled → `own/14*sks`, unscheduled → full `sks`),
-  `est_sks_no_s3` (excludes S3 / DOKTOR BIOLOGI), `n_unscheduled`, `n_s3`.
+  `est_sks` (scheduled → `own/total*sks`; unscheduled → `sks` split evenly
+  across every lecturer assigned to that class, full `sks` when there's only
+  one), `est_sks_no_s3` (excludes S3 / DOKTOR BIOLOGI), `n_unscheduled`, `n_s3`.
 
 ### Analyze teaching load
 
@@ -157,7 +158,7 @@ co-teachers' shares always sum to the course's own `sks` rather than each
 being scored independently against an assumed 14-meeting semester). Their
 total load is the sum over all their classes.
 
-Status is banded from the strict teaching SKS (`scheduled_sks`), defaulting to:
+By default, status is banded from the strict teaching SKS (`scheduled_sks`):
 
 | Band (teaching SKS) | Status |
 | --- | --- |
@@ -174,6 +175,11 @@ lecturers in `--names` without a result are reported `NO_DATA`. Classes with a
 meeting count outside the expected **8–14** range are listed as warnings (e.g.
 courses with no booked meetings, which contribute 0 SKS to the strict total).
 
+Pass `--neutral` to report SKS figures only, without banding anyone's load
+into these categories — the report keeps `NO_DATA` (a data-completeness fact,
+not a workload judgment) but leaves `status` blank otherwise, so the numbers
+speak for themselves and interpretation is left to the reader.
+
 Outputs (written to `--outdir`, default `.`):
 
 - `load_summary.csv` — lecturer, strict scheduled SKS (`scheduled_sks`),
@@ -188,13 +194,17 @@ Outputs (written to `--outdir`, default `.`):
   class whose meeting count differs from 14 (e.g. courses with no booked
   meetings, which contribute 0 SKS to the strict total).
 
-The `status` flag is banded from `scheduled_sks` (see the table above);
-`est_sks` is reported alongside for comparison. `scheduled_sks` (and the
-per-level `sks_s1`/`sks_s2`/`sks_s3`/`sks_profesi` totals) are the **strict**
-credit: only classes with a fixed/booked schedule count, and an unscheduled
-class (`class_meetings == 0`) is exempted — it contributes 0 there but still
-counts toward `est_sks` and `sks_unscheduled` (both at full `sks`).
-`sks_s1+sks_s2+sks_s3+sks_profesi` sums to `scheduled_sks` for each lecturer.
+Unless `--neutral` is passed, the `status` flag is banded from `scheduled_sks`
+(see the table above); `est_sks` is reported alongside for comparison.
+`scheduled_sks` (and the per-level `sks_s1`/`sks_s2`/`sks_s3`/`sks_profesi`
+totals) are the **strict** credit: only classes with a fixed/booked schedule
+count, and an unscheduled class (`class_meetings == 0`) is exempted — it
+contributes 0 there but still counts toward `est_sks` and `sks_unscheduled`.
+An unscheduled class's `sks` is split evenly across every lecturer assigned
+to it (full `sks` when there's only one), so a class awaiting a schedule with
+two co-teachers listed contributes half its credit to each, not the whole
+course credit to both. `sks_s1+sks_s2+sks_s3+sks_profesi` sums to
+`scheduled_sks` for each lecturer.
 Each class is also tagged with its `rumpun` (prodi/program-studi, e.g.
 `[PRODI] S1 BIOLOGI`) and a derived `level` — `S1`, `S2` (Magister), `S3`
 (Doctoral), `PROFESI`, or `OTHER` — classified from keywords in `rumpun`
@@ -213,10 +223,10 @@ conda run -n simaster simaster dashboard --dir data/clean --semester 20261 \
 ```
 
 Takes the same `--dir` / `--semester` / `--min` / `--max` / `--warn` /
-`--names` / `--outdir` options as `analyze` (see above for band definitions),
-plus `--filename` (default `index.html`, so the output can be dropped
-straight into a static host or GitHub Pages folder) and `--calendar-dir`
-(below). It writes: status-colored summary cards, a program-level breakdown
+`--names` / `--neutral` / `--outdir` options as `analyze` (see above for band
+definitions), plus `--filename` (default `index.html`, so the output can be
+dropped straight into a static host or GitHub Pages folder) and
+`--calendar-dir` (below). It writes: summary cards, a program-level breakdown
 (S1/S2/S3/PROFESI/OTHER, see above) with a faculty-wide stacked bar and a
 per-lecturer stacked-bar list showing exactly where each lecturer's SKS load
 sits across levels, a click-to-sort/filterable lecturers table (with a
@@ -224,6 +234,14 @@ per-lecturer Calendar download link — see `--calendar-dir` below), and a
 filterable per-class detail table (clicking a lecturer row filters the class
 table to their classes). The file has inline CSS/JS and no external assets or
 network calls, so it's safe to email or open from a USB stick.
+
+By default, lecturer rows/cards are colored and labeled by status band (see
+`analyze` above). Pass `--neutral` to drop the status column and the
+per-status summary cards entirely — the dashboard then presents SKS figures
+only (still sortable/filterable by every other column), framed as a
+scheduling reference for lecturers and coordinators rather than a verdict on
+anyone's load; useful when sharing the report with people for whom the
+categorical labels would read as more judgmental than intended.
 
 The lecturers table's **Calendar** column links each lecturer to
 `<calendar-dir>/jadwal_<slug>_<semester>.ics` — the same filename `ics`
@@ -303,10 +321,10 @@ simaster [--lecturer NAME]... [--names FILE]... [--semester SEMESTER]
          [--verbose] [--from-scratch] [--version]
 
 simaster analyze --dir DIR --semester SEMESTER [--warn WARN] [--min MIN]
-                 [--max MAX] [--names FILE] [--outdir DIR]
+                 [--max MAX] [--names FILE] [--neutral] [--outdir DIR]
 
 simaster dashboard --dir DIR --semester SEMESTER [--warn WARN] [--min MIN]
-                   [--max MAX] [--names FILE] [--outdir DIR]
+                   [--max MAX] [--names FILE] [--neutral] [--outdir DIR]
                    [--filename NAME] [--calendar-dir DIR]
 
 simaster clean --dir DIR --semester SEMESTER --names FILE [--outdir DIR]
@@ -330,10 +348,12 @@ simaster ics [--lecturer NAME]... [--names FILE]... --dir DIR --semester SEMESTE
 | `analyze --min` | Lower edge of the ideal OK band (default `8`). |
 | `analyze --max` | Overload limit (default `16`). |
 | `analyze --warn` | Below this teaching SKS is a WARNING (default `6`). |
+| `analyze --neutral` | Report SKS figures only; don't band lecturer load into WARNING/UNDERLOADED/OK/ABOVE/OVERLOADED categories. |
 | `dashboard --dir` | Directory holding `jadwal_*.json` results (use `data/clean/` for the clean dataset). |
 | `dashboard --min` | Lower edge of the ideal OK band (default `8`). |
 | `dashboard --max` | Overload limit (default `16`). |
 | `dashboard --warn` | Below this teaching SKS is a WARNING (default `6`). |
+| `dashboard --neutral` | Report SKS figures only; hide the status column and per-status summary cards. |
 | `dashboard --filename` | Output HTML filename (default `index.html`). |
 | `dashboard --calendar-dir` | Path, relative to the dashboard HTML once deployed, to each lecturer's `.ics` file, used for the Calendar column's links (default `assets/calendar`; pass `""` to omit the links). |
 | `ics --dir` | Directory holding `jadwal_*.json` results (use `data/clean/` for own-sessions-only, or `data/` — co-teacher entries are filtered either way). |

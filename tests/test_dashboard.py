@@ -66,6 +66,17 @@ class TestRenderDashboard:
         for status in ["OVERLOADED", "ABOVE", "OK", "UNDERLOADED", "WARNING", "NO_DATA"]:
             assert status in out
 
+    def test_neutral_mode_hides_status_categories(self, tmp_path):
+        _write_fixture(tmp_path, "Matin Nuhamunada, S.Si., M.Sc.")
+        result = aggregate_loads(tmp_path, "20261", 8, 16, neutral=True)
+        out = render_dashboard(result)
+        # No status column header, and no status stat-cards (the CSS still
+        # defines --status-color per status, but that's inert dead styling
+        # with no matching markup once these are gone).
+        assert '<th data-key="status">' not in out
+        for status in ["OVERLOADED", "ABOVE", "OK", "UNDERLOADED", "WARNING"]:
+            assert f'<div class="card-label">{status}</div>' not in out
+
     def test_warnings_rendered(self, tmp_path):
         courses = [{**COURSE, "jadwal": COURSE["jadwal"][:5]}]
         _write_fixture(tmp_path, "Matin Nuhamunada, S.Si., M.Sc.", courses=courses)

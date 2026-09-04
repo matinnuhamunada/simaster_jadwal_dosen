@@ -125,7 +125,11 @@ def is_s3(course: dict) -> bool:
     return program_level(course) == "S3"
 
 
-def compute_lecturer_load(courses: list[dict], dosen: str) -> dict:
+def compute_lecturer_load(
+    courses: list[dict],
+    dosen: str,
+    unscheduled_counts: dict[tuple[str, str], int] | None = None,
+) -> dict:
     """Per-class credit for one lecturer.
 
     Strict credit (``total_credit``) is ``own_meetings/class_meetings * sks``,
@@ -139,8 +143,11 @@ def compute_lecturer_load(courses: list[dict], dosen: str) -> dict:
     than the usual ~14 sessions (see ``MEETING_WARN_MIN``/``MAX``) must still
     have its co-teachers' shares sum to the course's ``sks``, not each
     independently scored against an assumed full semester. Estimated credit
-    (``est_sks``) instead treats an unscheduled class as full ``sks`` (the
-    lecturer is assigned) and otherwise equals the strict credit.
+    (``est_sks``) instead treats an unscheduled class as ``sks`` split evenly
+    across every lecturer assigned to it (from ``unscheduled_counts``, keyed
+    by ``(kode, kelas)``; defaults to 1 -- i.e. full ``sks`` -- when that
+    class isn't in the map or the map is omitted, e.g. a solo-taught class or
+    a direct unit-test call) and otherwise equals the strict credit.
     """
     total = 0.0
     est = 0.0
@@ -153,7 +160,13 @@ def compute_lecturer_load(courses: list[dict], dosen: str) -> dict:
         own_meetings = sum(1 for e in entries if _matches(e.get("dosen", ""), dosen))
         sks = _sks(c.get("sks"))
         own_credit = own_meetings / class_meetings * sks if class_meetings else 0.0
-        est_credit = sks if class_meetings == 0 else own_credit
+        if class_meetings == 0:
+            n_lecturers = max(
+                1, (unscheduled_counts or {}).get((c.get("kode", ""), c.get("kelas", "")), 1)
+            )
+            est_credit = sks / n_lecturers
+        else:
+            est_credit = own_credit
         level = program_level(c)
         total += own_credit
         est += est_credit
@@ -194,6 +207,30 @@ def _load_file(path: Path) -> tuple[dict, list]:
     return d.get("meta", {}), d.get("courses") or []
 
 
+def _unscheduled_class_lecturers(
+    files_data: list[tuple[str, list[dict]]],
+) -> dict[tuple[str, str], int]:
+    """Count distinct lecturers assigned to each unscheduled ``(kode, kelas)``.
+
+    A class with no booked schedule carries no session data to infer
+    co-teachers from, so this instead counts, across every lecturer's file,
+    how many distinct lecturers list that same unscheduled class -- the same
+    signal ``class_meetings`` uses for scheduled classes, just derived from
+    assignment rather than booked sessions.
+    """
+    assigned: dict[tuple[str, str], set[str]] = {}
+    for dosen, courses in files_data:
+        folded = _fold(dosen)
+        for c in courses:
+            entries = c.get("jadwal") or []
+            class_meetings = int(c.get("class_meetings", len(entries)))
+            if class_meetings != 0:
+                continue
+            key = (c.get("kode", ""), c.get("kelas", ""))
+            assigned.setdefault(key, set()).add(folded)
+    return {k: len(v) for k, v in assigned.items()}
+
+
 def aggregate_loads(
     directory,
     semester: str = "20261",
@@ -201,14 +238,18 @@ def aggregate_loads(
     max_sks: float = 16.0,
     warn: float = WARN_SKS,
     names: list[str] | None = None,
+    neutral: bool = False,
 ) -> dict:
     """Read every ``jadwal_*_<semester>.json`` and build the load report data.
 
     Dedupes by canonical `meta.dosen` (warns on duplicates), flags classes with
     a meeting count outside the expected 8-14 range, and reports expected names
-    (from `names`, slugified) that have no result file as `NO_DATA`. The
-    `status` flag is banded from the strict, schedule-only SKS
-    (`scheduled_sks`).
+    (from `names`, slugified) that have no result file as `NO_DATA`. Unless
+    `neutral` is set, the `status` flag is banded from the strict,
+    schedule-only SKS (`scheduled_sks`); when `neutral` is set, `status` is
+    left blank for every lecturer with data (`NO_DATA` is still reported --
+    that's a data-completeness fact, not a workload judgment) so the report
+    presents figures without categorizing anyone's load.
     """
     directory = Path(directory)
     files = sorted(directory.glob(f"jadwal_*_{semester}.json"))
@@ -216,8 +257,12 @@ def aggregate_loads(
     lecturers: dict[str, dict] = {}
     classes: list[dict] = []
 
-    for f in files:
-        meta, courses = _load_file(f)
+    loaded = [(f, *_load_file(f)) for f in files]
+    unscheduled_counts = _unscheduled_class_lecturers(
+        [(meta.get("dosen") or "", courses) for _, meta, courses in loaded]
+    )
+
+    for f, meta, courses in loaded:
         dosen = meta.get("dosen") or ""
         if not dosen:
             warnings.append(f"{f.name}: missing meta.dosen, skipped")
@@ -228,7 +273,7 @@ def aggregate_loads(
                 f"duplicate result for {dosen}: {lecturers[key]['source_file']} and {f.name}"
             )
             continue
-        load = compute_lecturer_load(courses, dosen)
+        load = compute_lecturer_load(courses, dosen, unscheduled_counts=unscheduled_counts)
         lecturers[key] = {
             "dosen": dosen,
             "dosenId": meta.get("dosenId"),
@@ -242,7 +287,7 @@ def aggregate_loads(
             "sks_unscheduled": load["sks_unscheduled"],
             "n_classes": load["n_classes"],
             "n_courses": load["n_courses"],
-            "status": classify(load["total_credit"], warn=warn, max_sks=max_sks),
+            "status": "" if neutral else classify(load["total_credit"], warn=warn, max_sks=max_sks),
         }
         for cls in load["classes"]:
             classes.append({"dosen": dosen, **cls})
@@ -287,6 +332,7 @@ def aggregate_loads(
         "max_sks": max_sks,
         "warn_sks": warn,
         "ok_high": OK_HIGH_SKS,
+        "neutral": neutral,
     }
 
 
@@ -318,6 +364,7 @@ def write_reports(result: dict, outdir=".") -> list[Path]:
 def build_report(result: dict) -> str:
     from datetime import datetime
 
+    neutral = result.get("neutral", False)
     warn = result.get("warn_sks", WARN_SKS)
     ok_min = result.get("min_sks", OK_MIN_SKS)
     ok_high = result.get("ok_high", OK_HIGH_SKS)
@@ -326,44 +373,76 @@ def build_report(result: dict) -> str:
         "# Teaching load report",
         "",
         f"- Semester: {result['semester']}",
-        f"- Status bands (teaching SKS): `WARNING < {warn:g}`, "
-        f"`UNDERLOADED {warn:g}-{ok_min:g}`, `OK {ok_min:g}-{ok_high:g}`, "
-        f"`ABOVE {ok_high:g}-{max_sks:g}`, `OVERLOADED > {max_sks:g}` "
-        f"(the official 12-SKS minimum already includes research; 16 is the "
-        f"limit and also covers research, community service and supporting "
-        f"activities)",
+    ]
+    if neutral:
+        lines.append(
+            "- This report presents teaching-load figures only; lecturer "
+            "loads are not banded into categories here (e.g. "
+            "overloaded/underloaded) -- interpretation is left to the reader."
+        )
+    else:
+        lines.append(
+            f"- Status bands (teaching SKS): `WARNING < {warn:g}`, "
+            f"`UNDERLOADED {warn:g}-{ok_min:g}`, `OK {ok_min:g}-{ok_high:g}`, "
+            f"`ABOVE {ok_high:g}-{max_sks:g}`, `OVERLOADED > {max_sks:g}` "
+            f"(the official 12-SKS minimum already includes research; 16 is the "
+            f"limit and also covers research, community service and supporting "
+            f"activities); a reference only, not a verdict"
+        )
+    lines += [
         f"- Generated: {datetime.now().isoformat(timespec='seconds')}",
         "",
     ]
-    groups = {
-        "OVERLOADED": [],
-        "ABOVE": [],
-        "OK": [],
-        "UNDERLOADED": [],
-        "WARNING": [],
-        "NO_DATA": [],
-    }
-    for row in result["lecturers"]:
-        groups.setdefault(row["status"], []).append(row)
 
-    for status in ["OVERLOADED", "ABOVE", "OK", "UNDERLOADED", "WARNING", "NO_DATA"]:
-        rows = groups[status]
-        lines.append(f"## {status} ({len(rows)})")
+    if neutral:
+        rows = result["lecturers"]
+        lines.append(f"## Lecturers ({len(rows)})")
         if not rows:
             lines.append("_none_")
         else:
             lines.append(
                 "| Lecturer | Scheduled SKS | Est. SKS | SKS S1 | SKS S2 | SKS S3 | "
-                "SKS Profesi | #classes | #courses |"
+                "SKS Profesi | #classes | #courses | Data |"
             )
-            lines.append("| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |")
+            lines.append("| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |")
             for r in rows:
+                data_flag = "no data" if r["status"] == "NO_DATA" else ""
                 lines.append(
                     f"| {r['dosen']} | {r['scheduled_sks']:g} | {r['est_sks']:g} | "
                     f"{r['sks_s1']:g} | {r['sks_s2']:g} | {r['sks_s3']:g} | {r['sks_profesi']:g} | "
-                    f"{r['n_classes']} | {r['n_courses']} |"
+                    f"{r['n_classes']} | {r['n_courses']} | {data_flag} |"
                 )
         lines.append("")
+    else:
+        groups = {
+            "OVERLOADED": [],
+            "ABOVE": [],
+            "OK": [],
+            "UNDERLOADED": [],
+            "WARNING": [],
+            "NO_DATA": [],
+        }
+        for row in result["lecturers"]:
+            groups.setdefault(row["status"], []).append(row)
+
+        for status in ["OVERLOADED", "ABOVE", "OK", "UNDERLOADED", "WARNING", "NO_DATA"]:
+            rows = groups[status]
+            lines.append(f"## {status} ({len(rows)})")
+            if not rows:
+                lines.append("_none_")
+            else:
+                lines.append(
+                    "| Lecturer | Scheduled SKS | Est. SKS | SKS S1 | SKS S2 | SKS S3 | "
+                    "SKS Profesi | #classes | #courses |"
+                )
+                lines.append("| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |")
+                for r in rows:
+                    lines.append(
+                        f"| {r['dosen']} | {r['scheduled_sks']:g} | {r['est_sks']:g} | "
+                        f"{r['sks_s1']:g} | {r['sks_s2']:g} | {r['sks_s3']:g} | {r['sks_profesi']:g} | "
+                        f"{r['n_classes']} | {r['n_courses']} |"
+                    )
+            lines.append("")
 
     lines.append(
         "## By program level\n\n"

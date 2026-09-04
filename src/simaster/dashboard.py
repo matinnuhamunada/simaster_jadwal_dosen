@@ -118,12 +118,16 @@ LEVEL_CHART_CAPTION = (
     "listed lecturer, on a shared SKS scale (not a percentage of the "
     "whole)."
 )
-LEVEL_BARS_CAPTION = (
-    "Each lecturer's SKS split by program level, and within each level by "
-    "scheduled vs. unscheduled (solid vs. translucent, per the legend "
-    "above) &mdash; mirrors the filter/sort applied to Exhibit 1 above. "
-    "Click a bar to filter the class list to that lecturer."
-)
+def _level_bars_caption(ok_high: float, max_sks: float) -> str:
+    return (
+        "Each lecturer's SKS split by program level, and within each level by "
+        "scheduled vs. unscheduled (solid vs. translucent, per the legend "
+        "above) &mdash; mirrors the filter/sort applied to Exhibit 1 above. "
+        f"The two faint vertical marks are reference points for scale, not a "
+        f"verdict: {ok_high:g} (top of the commonly used ideal teaching-only "
+        f"range) and {max_sks:g} (a commonly used overall load ceiling). "
+        f"Click a bar to filter the class list to that lecturer."
+    )
 NETWORK_CAPTION = (
     "Lecturers who co-teach the same course (same <strong>kode</strong>, "
     "any kelas), restricted to the lecturers listed elsewhere in this report "
@@ -150,11 +154,14 @@ NETWORK_KELAS_CAPTION = (
     "search and click-to-filter behavior as above."
 )
 NETWORK_DIAGRAM_CAPTION = (
-    "Node size is each lecturer's total scheduled SKS (Exhibit 1). A fixed "
-    "layout, not a running simulation &mdash; positions are computed once "
-    "with generous spacing so nodes don't crowd each other, then held "
-    "still. Drag a node to see its neighborhood pull free of the rest of the "
-    "graph; release it and it springs back to its regular spot."
+    "Node size is each lecturer's total scheduled SKS (Exhibit 1); node color "
+    "is degree centrality &mdash; how many distinct co-teachers they have in "
+    "this network, darker meaning more (see the gradient legend above; "
+    "program level is in the tooltip instead). A fixed layout, not a running "
+    "simulation &mdash; positions are computed once with generous spacing so "
+    "nodes don't crowd each other, then held still. Drag a node to see its "
+    "neighborhood pull free of the rest of the graph; release it and it "
+    "springs back to its regular spot."
 )
 CLASSES_CAPTION = (
     "Every class session by lecturer &mdash; for a co-taught class, only that "
@@ -229,10 +236,6 @@ def _level_cards(result: dict) -> str:
 
 
 def _stat_cards(result: dict) -> str:
-    counts = {status: 0 for status in STATUS_ORDER}
-    for row in result["lecturers"]:
-        counts[row["status"]] = counts.get(row["status"], 0) + 1
-
     cards = [
         f'<div class="card" data-status="" onclick="filterInput.value=\'\';lecturerTable.render();">'
         f'<div class="card-count">{len(result["lecturers"])}</div>'
@@ -241,6 +244,19 @@ def _stat_cards(result: dict) -> str:
         f'<div class="card-count">{len(result["warnings"])}</div>'
         f'<div class="card-label">Warnings</div></div>',
     ]
+    if result.get("neutral"):
+        no_data_n = sum(1 for r in result["lecturers"] if r["status"] == "NO_DATA")
+        if no_data_n:
+            cards.append(
+                '<div class="card no-click status-NO_DATA">'
+                f'<div class="card-count">{no_data_n}</div>'
+                '<div class="card-label">No data</div></div>'
+            )
+        return "\n".join(cards)
+
+    counts = {status: 0 for status in STATUS_ORDER}
+    for row in result["lecturers"]:
+        counts[row["status"]] = counts.get(row["status"], 0) + 1
     for status in STATUS_ORDER:
         cards.append(
             f'<div class="card status-{status}" '
@@ -257,22 +273,37 @@ def _warnings_html(warnings: list[str]) -> str:
     return "\n".join(f"<li>{_e(w)}</li>" for w in warnings)
 
 
-def _methodology_html(warn: float, ok_min: float, ok_high: float, max_sks: float) -> str:
+def _methodology_html(
+    warn: float,
+    ok_min: float,
+    ok_high: float,
+    max_sks: float,
+    neutral: bool = False,
+    has_ics: bool = False,
+) -> str:
     """A short prose explainer for how the numbers/bands in this report are derived."""
-    return f"""
-<p>This report counts each lecturer's <strong>own class sessions only</strong>:
-on a co-taught class, credit belongs to whichever lecturer actually leads a
-given session, so shared classes are never double-counted.</p>
+    intro = f"""
+<p>This report is a scheduling reference &mdash; a way for lecturers and
+coordinators to see, in one place, who is teaching what and how the credit
+(SKS) adds up, so each lecturer can track and plan their own schedule. It
+counts each lecturer's <strong>own class sessions only</strong>: on a
+co-taught class, credit belongs to whichever lecturer actually leads a given
+session, so shared classes are never double-counted.</p>
 <p><strong>Scheduled SKS</strong> is the credit already booked on a room and
 time slot this semester &mdash; each class contributes its course credit
 (SKS) scaled by the share of the semester's {MEETINGS_PER_SEMESTER} meetings
 the lecturer actually teaches, and a class with no booked schedule yet
-contributes nothing. <strong>Est. SKS</strong> closes that gap by adding the
-full course credit for classes still awaiting a schedule, estimating the
-lecturer's eventual load once every class is booked; the difference between
-the two &mdash; shown as <strong>SKS Unsched.</strong> &mdash; is exposure
-still sitting in unscheduled classes.</p>
-<p>Status bands are drawn on Scheduled SKS: below {warn:g} is
+contributes nothing. <strong>Est. SKS</strong> closes that gap by adding
+credit for classes still awaiting a schedule (split evenly when more than one
+lecturer is assigned to it), estimating the eventual total once every class
+is booked; the difference between the two &mdash; shown as <strong>SKS
+Unsched.</strong> &mdash; is exposure still sitting in unscheduled classes.</p>
+"""
+    if neutral:
+        status_para = ""
+    else:
+        status_para = f"""
+<p>For reference, this report also bands Scheduled SKS: below {warn:g} is
 <strong>WARNING</strong>; {warn:g}&ndash;{ok_min:g} is
 <strong>UNDERLOADED</strong>; {ok_min:g}&ndash;{ok_high:g} is
 <strong>OK</strong> &mdash; the ideal <em>teaching-only</em> range, since the
@@ -280,18 +311,40 @@ official {ok_high:g}-SKS minimum load already folds in research;
 {ok_high:g}&ndash;{max_sks:g} is <strong>ABOVE</strong>; and past
 {max_sks:g} is <strong>OVERLOADED</strong>, the hard ceiling that itself
 still has to cover research, community service and supporting duties on top
-of teaching.</p>
+of teaching. These bands are a reference only, not a verdict &mdash; reading
+the distribution and deciding what, if anything, it calls for is left to the
+reader.</p>
+"""
+    level_para = """
 <p>Program level (S1/S2/S3/Profesi) is read from each course's rumpun tag
 (a doctoral course code prefix is also recognized as a fallback); S3 credit
 is broken out on its own since doctoral supervision carries different
 expectations than undergraduate or master's teaching.</p>
-""".strip()
+"""
+    ics_para = ""
+    if has_ics:
+        ics_para = """
+<p>Each lecturer's row in Exhibit 1 has a <strong>Calendar</strong> button
+that downloads their own class sessions as a calendar file (.ics). To add it
+to Google Calendar: open Google Calendar on the web, click the gear icon
+&rarr; <strong>Settings</strong> &rarr; <strong>Import &amp; export</strong>
+&rarr; <strong>Import</strong>, choose the downloaded file, pick which
+calendar to add it to, then click <strong>Import</strong>. Most other
+calendar apps (Outlook, Apple Calendar, etc.) support the same .ics format.
+Events are already converted to the correct local time, and re-importing an
+updated file after a schedule change replaces the matching events instead of
+duplicating them.</p>
+"""
+    return (intro + status_para + level_para + ics_para).strip()
 
 
 def _network_legend_html() -> str:
-    return "\n".join(
-        f'<span class="legend-item level-{level}"><span class="swatch"></span>{_e(level)}</span>'
-        for level in PROGRAM_LEVELS
+    # Node color in the diagram below is degree centrality (co-teaching
+    # connection count), not program level -- see NETWORK_DIAGRAM_CAPTION --
+    # so the legend is this one gradient rather than a per-level swatch list.
+    return (
+        '<span class="legend-item">Fewer connections'
+        '<span class="gradient-bar"></span>More connections</span>'
     )
 
 
@@ -378,13 +431,14 @@ def render_dashboard(
     (e.g. when no .ics files are being published alongside the dashboard).
     """
     semester = _e(result.get("semester", ""))
+    neutral = bool(result.get("neutral"))
     warn = result.get("warn_sks", WARN_SKS)
     ok_min = result.get("min_sks", 8.0)
     ok_high = result.get("ok_high", OK_HIGH_SKS)
     max_sks = result.get("max_sks", 16.0)
     generated = datetime.now().isoformat(timespec="seconds")
 
-    lecturer_columns = list(LECTURER_COLUMNS)
+    lecturer_columns = [c for c in LECTURER_COLUMNS if not (neutral and c[0] == "status")]
     lecturers = result["lecturers"]
     if calendar_dir:
         lecturer_columns.append(ICS_COLUMN)
@@ -435,7 +489,9 @@ def render_dashboard(
         exhibit_n += 1
     network_section = course_network_section + class_network_section
     warnings_exhibit_n = exhibit_n
-    methodology_html = _methodology_html(warn, ok_min, ok_high, max_sks)
+    methodology_html = _methodology_html(
+        warn, ok_min, ok_high, max_sks, neutral=neutral, has_ics=bool(calendar_dir)
+    )
 
     def _th(key, label, kind):
         cls = ' class="num"' if kind in ("num", "sks") else ""
@@ -448,7 +504,7 @@ def render_dashboard(
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Teaching Load Report &mdash; Semester {semester}</title>
+<title>Teaching Schedule &mdash; Semester {semester}</title>
 <style>
 :root {{
   --bg: #f7f5f0;
@@ -702,13 +758,24 @@ h3.subhead {{
   font-size: 0.68rem;
   color: var(--muted);
 }}
+.level-chart-axis .tick.ref-tick {{ color: var(--text); font-weight: 600; }}
 .level-bar-track {{
+  position: relative;
   display: flex;
   width: 100%;
   height: 1.6rem;
   border-radius: 2px;
   overflow: hidden;
   background: var(--border);
+}}
+.level-bar-refline {{
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: var(--text);
+  opacity: 0.3;
+  pointer-events: none;
 }}
 .level-bar-segment {{
   background: var(--level-color);
@@ -778,13 +845,14 @@ h3.subhead {{
   color: var(--muted);
 }}
 .network-legend .legend-item {{ display: inline-flex; align-items: center; }}
-.network-legend .swatch {{
+.network-legend .gradient-bar {{
   display: inline-block;
-  width: 9px;
-  height: 9px;
-  border-radius: 50%;
-  margin-right: 0.35rem;
-  background: var(--level-color);
+  width: 110px;
+  height: 8px;
+  border-radius: 2px;
+  margin: 0 0.5rem;
+  vertical-align: middle;
+  background: linear-gradient(to right, rgb(214, 221, 230), {ACCENT});
 }}
 .network-body {{ position: relative; }}
 .matrix-scroll {{
@@ -855,7 +923,7 @@ h3.subhead {{
   border: 1px solid var(--border);
 }}
 .network-svg circle.node-dot {{
-  fill: var(--level-color);
+  fill: #9aa5b1;
   stroke: var(--panel);
   stroke-width: 1px;
   cursor: grab;
@@ -887,8 +955,10 @@ h3.subhead {{
 <div class="container">
 <header>
   <p class="kicker">Fakultas Biologi UGM &middot; SIMASTER</p>
-  <h1>Teaching Load Report</h1>
-  <p class="dek">Semester {semester} &middot; generated {generated}</p>
+  <h1>Teaching Schedule</h1>
+  <p class="dek">Semester {semester} &middot; generated {generated} &mdash; a
+  scheduling reference to help lecturers and coordinators track and plan
+  their schedule.</p>
 </header>
 
 <section class="stat-cards">
@@ -903,7 +973,7 @@ h3.subhead {{
 <section id="lecturers">
   <h2><span class="exhibit-tag">Exhibit 1</span> Lecturers</h2>
   <p class="caption">{LECTURERS_CAPTION}</p>
-  <input id="filter" type="search" placeholder="Filter by lecturer or status...">
+  <input id="filter" type="search" placeholder="{'Filter by lecturer...' if neutral else 'Filter by lecturer or status...'}">
   <span id="filter-count" class="filter-count"></span>
   <table id="lecturer-table">
     <thead><tr>
@@ -926,7 +996,7 @@ h3.subhead {{
   </div>
   <div id="level-total-bar"></div>
   <h3 class="subhead">By lecturer</h3>
-  <p class="caption">{LEVEL_BARS_CAPTION}</p>
+  <p class="caption">{_level_bars_caption(ok_high, max_sks)}</p>
   <div class="level-bars" id="level-bars"></div>
 </section>
 
@@ -965,6 +1035,11 @@ const CLASS_SKS = {class_sks_json};
 const LEVEL_SKS_FIELDS = {level_sks_fields_json};
 const NETWORK = {network_json};
 const NETWORK_KELAS = {class_network_json};
+// The 12/16-SKS reference marks drawn on Exhibit 2's per-lecturer bars --
+// ok_high (the top of the ideal teaching-only band) and max_sks (the overall
+// ceiling) -- same values the (optional) status bands are drawn from.
+const OK_HIGH_SKS = {ok_high:g};
+const MAX_SKS = {max_sks:g};
 
 const filterInput = document.getElementById("filter");
 const classFilterInput = document.getElementById("class-filter");
@@ -981,6 +1056,21 @@ function heatmapColor(t) {{
   return "rgb(" + c.join(",") + ")";
 }}
 
+// Sequential node-fill scale for the network diagram, keyed to each node's
+// degree (distinct co-teachers) rather than its program level -- so color
+// reads as "how central is this lecturer in the co-teaching network"
+// (darker = more connections). A light-slate floor (not white) keeps every
+// node visible even at 0 connections; the high end matches --accent, the
+// same navy used for emphasis elsewhere on the page. Program level moves to
+// the tooltip/title instead of a swatch.
+const NODE_COLOR_LOW = [214, 221, 230];
+const NODE_COLOR_HIGH = [19, 41, 75];
+
+function nodeColor(t) {{
+  const c = NODE_COLOR_LOW.map((lo, i) => Math.round(lo + (NODE_COLOR_HIGH[i] - lo) * t));
+  return "rgb(" + c.join(",") + ")";
+}}
+
 function columnMaxes(data, keys) {{
   const maxes = {{}};
   for (const key of keys) {{
@@ -991,11 +1081,11 @@ function columnMaxes(data, keys) {{
 
 function makeTable(opts) {{
   const {{
-    data, columns, tbody, filterInput, countEl, defaultKey, rowClass, onRowClick,
+    data, columns, tbody, filterInput, countEl, defaultKey, defaultDir = -1, rowClass, onRowClick,
     centeredColumns = [], sksColumns = [], pageSize = null, firstPageSize = null, moreButton = null,
   }} = opts;
   const initialVisible = firstPageSize || pageSize || data.length;
-  const state = {{ key: defaultKey, dir: -1, visible: initialVisible }};
+  const state = {{ key: defaultKey, dir: defaultDir, visible: initialVisible }};
   const heatmapMax = columnMaxes(data, centeredColumns);
   // `rows` exposes the currently filtered+sorted row set -- the full match,
   // not just the visible page -- (updated on every render) so other views
@@ -1095,7 +1185,8 @@ const lecturerTable = makeTable({{
   tbody: document.querySelector("#lecturer-table tbody"),
   filterInput: filterInput,
   countEl: document.getElementById("filter-count"),
-  defaultKey: "scheduled_sks",
+  defaultKey: "dosen",
+  defaultDir: 1,
   rowClass: r => "status-" + r.status + " lecturer-row",
   onRowClick: r => {{ classFilterInput.value = r.dosen; classTable.render(); }},
   centeredColumns: LECTURER_CENTERED,
@@ -1281,10 +1372,22 @@ const LEVEL_BARS_DOMAIN_MAX = niceMax(
   Math.max(...LECTURERS.map(r => Number(r.est_sks) || 0), 0)
 );
 
+// Reference marks for the 12/16-SKS landmarks, in domain-% terms -- skipped
+// individually if past the current chart's max so a landmark never renders
+// off-scale. Drawn as a subtle vertical line on every row's own track (not
+// one continuous overlay) so each lecturer's bar can be read against the
+// same two landmarks at a glance, without implying a verdict.
+function levelBarsRefMarks() {{
+  return [OK_HIGH_SKS, MAX_SKS]
+    .filter(v => LEVEL_BARS_DOMAIN_MAX > 0 && v > 0 && v <= LEVEL_BARS_DOMAIN_MAX)
+    .map(v => ({{ value: v, pct: (v / LEVEL_BARS_DOMAIN_MAX) * 100 }}));
+}}
+
 function renderLevelBars() {{
   const container = document.getElementById("level-bars");
   if (!container) return;
   container.textContent = "";
+  const refMarks = levelBarsRefMarks();
 
   const axisRow = document.createElement("div");
   axisRow.className = "level-bar-row axis-row";
@@ -1298,6 +1401,13 @@ function renderLevelBars() {{
     tick.className = "tick";
     tick.style.left = (f * 100) + "%";
     tick.textContent = (LEVEL_BARS_DOMAIN_MAX * f).toFixed(0) + (f === 1 ? " SKS" : "");
+    axis.appendChild(tick);
+  }});
+  refMarks.forEach(({{ value, pct }}) => {{
+    const tick = document.createElement("span");
+    tick.className = "tick ref-tick";
+    tick.style.left = pct + "%";
+    tick.textContent = value.toFixed(0);
     axis.appendChild(tick);
   }});
   axisRow.appendChild(axis);
@@ -1332,6 +1442,12 @@ function renderLevelBars() {{
         track.appendChild(seg);
       }}
     }}
+    refMarks.forEach(({{ pct }}) => {{
+      const line = document.createElement("div");
+      line.className = "level-bar-refline";
+      line.style.left = pct + "%";
+      track.appendChild(line);
+    }});
     row.appendChild(track);
     container.appendChild(row);
   }}
@@ -1418,6 +1534,16 @@ function initNetwork(idSuffix, data, unitLabel) {{
   }}
   const maxWeight = data.edges.reduce((m, e) => Math.max(m, e.weight), 1);
 
+  // Degree centrality (distinct co-teachers, not edge weight) drives node
+  // color in the diagram below -- computed once from the full edge set, so
+  // it doesn't shift as the threshold/search controls dim things in place.
+  const degreeById = new Map(nodes.map(node => [node.id, 0]));
+  for (const e of data.edges) {{
+    degreeById.set(e.source, (degreeById.get(e.source) || 0) + 1);
+    degreeById.set(e.target, (degreeById.get(e.target) || 0) + 1);
+  }}
+  const maxDegree = Math.max(1, ...nodes.map(node => degreeById.get(node.id) || 0));
+
   const corner = document.createElement("th");
   corner.className = "corner";
   head.appendChild(corner);
@@ -1488,7 +1614,10 @@ function initNetwork(idSuffix, data, unitLabel) {{
     // than by co-teaching count, so the diagram visually tracks the same
     // "how loaded is this person" question as Exhibit 1.
     const maxSks = nodes.reduce((m, node) => Math.max(m, node.sks || 0), 0) || 1;
-    const nodeRadius = sks => 5 + Math.sqrt(Math.max(sks, 0) / maxSks) * 15;
+    // Wider min/max spread than a plain sqrt(share) encoding so the smallest
+    // and largest loads read as visibly different sizes at a glance, not
+    // just on close inspection.
+    const nodeRadius = sks => 4 + Math.sqrt(Math.max(sks, 0) / maxSks) * 28;
     const radiusById = new Map(nodes.map(node => [node.id, nodeRadius(node.sks || 0)]));
 
     const home = {{}};
@@ -1602,15 +1731,19 @@ function initNetwork(idSuffix, data, unitLabel) {{
       circle.setAttribute("cx", st.x);
       circle.setAttribute("cy", st.y);
       circle.setAttribute("r", st.radius);
-      circle.classList.add("node-dot", "level-" + st.node.level);
+      circle.classList.add("node-dot");
+      const degree = degreeById.get(st.node.id) || 0;
+      circle.style.fill = nodeColor(maxDegree > 0 ? degree / maxDegree : 0);
+      const connWord = degree === 1 ? "connection" : "connections";
       const title = document.createElementNS(svgNS, "title");
       title.textContent = st.node.id + " — " + (st.node.sks || 0).toFixed(1) + " scheduled SKS, " +
-        st.node.count + " " + unitWord(st.node.count) + " (" + st.node.level + ")";
+        st.node.count + " " + unitWord(st.node.count) + " (" + st.node.level + "), " +
+        degree + " co-teaching " + connWord;
       circle.appendChild(title);
       circle.addEventListener("mouseenter", evt => showTooltip(evt,
         "<strong>" + escapeHtml(st.node.id) + "</strong><br>" + (st.node.sks || 0).toFixed(1) +
         " scheduled SKS · " + st.node.count + " " + unitWord(st.node.count) + " · " +
-        escapeHtml(st.node.level)));
+        escapeHtml(st.node.level) + " · " + degree + " " + connWord));
       circle.addEventListener("mouseleave", hideTooltip);
       svg.appendChild(circle);
       st.el = circle;

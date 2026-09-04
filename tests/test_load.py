@@ -5,6 +5,7 @@ from simaster.load import (
     MEETINGS_PER_SEMESTER,
     SUMMARY_HEADER,
     aggregate_loads,
+    build_report,
     classify,
     compute_lecturer_load,
     is_s3,
@@ -166,6 +167,38 @@ class TestComputeLecturerLoad:
         assert load["total_credit"] == 0.0
         assert load["sks_unscheduled"] == 4.0
         assert load["classes"][0]["est_credit"] == 4.0
+
+    def test_unscheduled_class_split_across_co_teachers(self):
+        # Two lecturers are assigned to the same unscheduled class -- the
+        # 4.0 SKS should be split evenly rather than each getting full credit.
+        courses = [
+            {
+                "kode": "K4",
+                "mata_kuliah": "Disertasi",
+                "kelas": "D",
+                "sks": "4.00",
+                "jadwal": [],
+            }
+        ]
+        load = compute_lecturer_load(
+            courses,
+            "Matin Nuhamunada, S.Si., M.Sc.",
+            unscheduled_counts={("K4", "D"): 2},
+        )
+        assert load["est_sks"] == 2.0
+        assert load["sks_unscheduled"] == 2.0
+        assert load["classes"][0]["est_credit"] == 2.0
+
+    def test_unscheduled_class_default_count_is_full_sks(self):
+        # A class absent from unscheduled_counts (e.g. solo-taught) still
+        # gets full credit, same as when no map is passed at all.
+        courses = [
+            {"kode": "K4", "mata_kuliah": "Disertasi", "kelas": "D", "sks": "4.00", "jadwal": []}
+        ]
+        load = compute_lecturer_load(
+            courses, "Matin Nuhamunada, S.Si., M.Sc.", unscheduled_counts={}
+        )
+        assert load["est_sks"] == 4.0
 
     def test_level_sks_by_rumpun(self):
         courses = [
@@ -345,6 +378,46 @@ class TestAggregateLoads:
         assert len(result["lecturers"]) == 0
         assert any("missing meta.dosen" in w for w in result["warnings"])
 
+    def test_unscheduled_class_split_across_lecturer_files(self, tmp_path):
+        # Both lecturers are assigned the same unscheduled class (K4/D, 4.0
+        # SKS) -- across the whole directory that's 2 lecturers, so each
+        # should be estimated at 2.0, not 4.0 apiece.
+        unscheduled = [
+            {"kode": "K4", "mata_kuliah": "Disertasi", "kelas": "D", "sks": "4.00", "jadwal": []}
+        ]
+        _write_fixture(tmp_path, "matin", "Matin Nuhamunada, S.Si., M.Sc.", "1", unscheduled)
+        _write_fixture(tmp_path, "luthfi", "Luthfi Nurhidayat, S.Si., M.Sc.", "2", unscheduled)
+
+        result = aggregate_loads(tmp_path, "20261", 12, 16)
+        by_dosen = {r["dosen"]: r for r in result["lecturers"]}
+        assert by_dosen["Matin Nuhamunada, S.Si., M.Sc."]["est_sks"] == 2.0
+        assert by_dosen["Luthfi Nurhidayat, S.Si., M.Sc."]["est_sks"] == 2.0
+        assert by_dosen["Matin Nuhamunada, S.Si., M.Sc."]["sks_unscheduled"] == 2.0
+
+    def test_neutral_mode_leaves_status_blank(self, tmp_path):
+        _write_fixture(tmp_path, "matin", "Matin Nuhamunada, S.Si., M.Sc.", "16764", COURSES_SOLO)
+        result = aggregate_loads(tmp_path, "20261", 12, 16, neutral=True)
+        assert result["neutral"] is True
+        assert result["lecturers"][0]["status"] == ""
+        # scheduled_sks/est_sks are unaffected by neutral mode
+        assert result["lecturers"][0]["scheduled_sks"] == 2.0
+
+    def test_neutral_mode_still_reports_no_data(self, tmp_path):
+        _write_fixture(
+            tmp_path,
+            "matin_nuhamunada_s_si_m_sc",
+            "Matin Nuhamunada, S.Si., M.Sc.",
+            "16764",
+            COURSES_SOLO,
+        )
+        result = aggregate_loads(
+            tmp_path, "20261", 12, 16,
+            names=["Matin Nuhamunada, S.Si., M.Sc.", "Dr. Jane Doe, S.Si."],
+            neutral=True,
+        )
+        no_data = [r for r in result["lecturers"] if r["status"] == "NO_DATA"]
+        assert no_data[0]["dosen"] == "Dr. Jane Doe, S.Si."
+
 
 class TestWriteReports:
     def test_outputs_written(self, tmp_path):
@@ -371,3 +444,14 @@ class TestWriteReports:
             detail_rows = list(csv.reader(f))
         assert "rumpun" in detail_rows[0]
         assert "level" in detail_rows[0]
+
+    def test_neutral_report_has_no_status_bands_or_groups(self, tmp_path):
+        _write_fixture(tmp_path, "matin", "Matin Nuhamunada, S.Si., M.Sc.", "16764", COURSES_SOLO)
+        result = aggregate_loads(tmp_path, "20261", 12, 16, neutral=True)
+        report = build_report(result)
+        assert "# Teaching load report" in report
+        assert "Matin Nuhamunada" in report
+        assert "## Lecturers (1)" in report
+        assert "interpretation is left to the reader" in report
+        assert "## WARNING" not in report
+        assert "OVERLOADED" not in report

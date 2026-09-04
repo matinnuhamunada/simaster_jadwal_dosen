@@ -121,6 +121,15 @@ def _analyze_parser() -> argparse.ArgumentParser:
         help="names file (like target.md) to report NO_DATA for missing lecturers.",
     )
     parser.add_argument(
+        "--neutral",
+        action="store_true",
+        help="report SKS figures only; don't band lecturer load into "
+        "WARNING/UNDERLOADED/OK/ABOVE/OVERLOADED-style categories. Use this "
+        "when the report is meant to help lecturers manage their own "
+        "schedule rather than to flag anyone's load, leaving interpretation "
+        "of the numbers to the reader.",
+    )
+    parser.add_argument(
         "--outdir", default=".", help="output directory (default: current directory)."
     )
     parser.add_argument(
@@ -169,6 +178,15 @@ def _dashboard_parser() -> argparse.ArgumentParser:
         default=None,
         metavar="FILE",
         help="names file (like target.md) to report NO_DATA for missing lecturers.",
+    )
+    parser.add_argument(
+        "--neutral",
+        action="store_true",
+        help="report SKS figures only; don't band lecturer load into "
+        "WARNING/UNDERLOADED/OK/ABOVE/OVERLOADED-style categories. Use this "
+        "when the report is meant to help lecturers manage their own "
+        "schedule rather than to flag anyone's load, leaving interpretation "
+        "of the numbers to the reader.",
     )
     parser.add_argument(
         "--outdir", default=".", help="output directory (default: current directory)."
@@ -367,6 +385,7 @@ def run_analyze(args) -> int:
         args.max_sks,
         warn=args.warn_sks,
         names=names,
+        neutral=args.neutral,
     )
     paths = write_reports(result, args.outdir)
     print(f"[analyze] {len(result['lecturers'])} lecturers, "
@@ -384,6 +403,7 @@ def run_dashboard(args) -> int:
         args.max_sks,
         warn=args.warn_sks,
         names=names,
+        neutral=args.neutral,
     )
     sessions_path = Path(args.dir) / "sessions.csv"
     lecturer_names = [r["dosen"] for r in result["lecturers"]]

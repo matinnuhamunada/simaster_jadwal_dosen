@@ -76,15 +76,20 @@ def _unique_own_entries(entries: list[dict]) -> list[dict]:
 
 
 def clean_lecturer_file(
-    meta: dict, courses: list[dict], class_meetings: dict[tuple[str, str], int]
+    meta: dict,
+    courses: list[dict],
+    class_meetings: dict[tuple[str, str], int],
+    unscheduled_counts: dict[tuple[str, str], int] | None = None,
 ) -> dict:
     """Clean one lecturer's raw JSON: own sessions only + SKS estimation.
 
     Per class, the estimated credit is ``own_meetings / total * sks`` (``total``
     is this class's actual booked session count across every co-teacher, from
-    ``class_meetings``) when the class has a schedule, and full ``sks`` when
-    it has no booked meetings. ``est_sks_no_s3`` excludes S3 (DOKTOR BIOLOGI)
-    classes.
+    ``class_meetings``) when the class has a schedule, and ``sks`` split
+    evenly across every lecturer assigned to it (from ``unscheduled_counts``,
+    keyed by ``(kode, kelas)``; defaults to 1 -- full ``sks`` -- when absent)
+    when it has no booked meetings. ``est_sks_no_s3`` excludes S3 (DOKTOR
+    BIOLOGI) classes.
     """
     dosen = meta.get("dosen") or ""
     own_entries = 0
@@ -99,9 +104,14 @@ def clean_lecturer_file(
             [e for e in (c.get("jadwal") or []) if _matches(e.get("dosen", ""), dosen)]
         )
         own_meetings = len(own)
-        total = class_meetings.get((c.get("kode", ""), c.get("kelas", "")), 0)
+        key = (c.get("kode", ""), c.get("kelas", ""))
+        total = class_meetings.get(key, 0)
         s3 = is_s3(c)
-        est = sks if total == 0 else own_meetings / total * sks
+        if total == 0:
+            n_lecturers = max(1, (unscheduled_counts or {}).get(key, 1))
+            est = sks / n_lecturers
+        else:
+            est = own_meetings / total * sks
         own_entries += own_meetings
         est_sks += est
         if not s3:
@@ -135,6 +145,30 @@ def clean_lecturer_file(
     return {"meta": clean_meta, "courses": clean_courses}
 
 
+def _unscheduled_lecturer_counts(
+    directory: Path, semester: str, class_meetings: dict[tuple[str, str], int]
+) -> dict[tuple[str, str], int]:
+    """Count distinct lecturers assigned to each unscheduled ``(kode, kelas)``.
+
+    Scans every raw ``jadwal_*_<semester>.json`` in ``directory`` (not just
+    the requested ``names``, so a co-teacher outside that list still counts),
+    since an unscheduled class has no booked sessions to infer co-teachers
+    from -- see ``load._unscheduled_class_lecturers`` for the same approach.
+    """
+    assigned: dict[tuple[str, str], set[str]] = {}
+    for f in sorted(directory.glob(f"jadwal_*_{semester}.json")):
+        data = json.loads(f.read_text(encoding="utf-8"))
+        dosen = (data.get("meta") or {}).get("dosen") or ""
+        if not dosen:
+            continue
+        folded = _fold(dosen)
+        for c in data.get("courses") or []:
+            key = (c.get("kode", ""), c.get("kelas", ""))
+            if class_meetings.get(key, 0) == 0:
+                assigned.setdefault(key, set()).add(folded)
+    return {k: len(v) for k, v in assigned.items()}
+
+
 def clean_all(directory, semester: str, names: list[str], outdir="data/clean") -> dict:
     """Aggregate + dedupe raw CSVs, then write clean per-lecturer JSON files."""
     directory = Path(directory)
@@ -152,6 +186,7 @@ def clean_all(directory, semester: str, names: list[str], outdir="data/clean") -
             w.writerows(sessions)
 
     counts = _class_meetings(sessions, header)
+    unscheduled_counts = _unscheduled_lecturer_counts(directory, semester, counts)
     written: list[Path] = []
     for name in names:
         stem = f"jadwal_{slugify(name)}_{semester}"
@@ -159,7 +194,9 @@ def clean_all(directory, semester: str, names: list[str], outdir="data/clean") -
         if not raw_path.exists():
             continue  # no raw data (NO_DATA)
         data = json.loads(raw_path.read_text(encoding="utf-8"))
-        clean = clean_lecturer_file(data.get("meta", {}), data.get("courses") or [], counts)
+        clean = clean_lecturer_file(
+            data.get("meta", {}), data.get("courses") or [], counts, unscheduled_counts
+        )
         out_path = outdir / f"{stem}.json"
         out_path.write_text(json.dumps(clean, ensure_ascii=False, indent=2), encoding="utf-8")
         written.append(out_path)

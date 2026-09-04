@@ -125,6 +125,22 @@ class TestCleanLecturerFile:
         assert m["n_unscheduled"] == 2
         assert m["n_s3"] == 1
 
+    def test_unscheduled_class_split_across_co_teachers(self):
+        counts = {("BISB2", "B"): 0}
+        courses = [
+            {
+                "kode": "BISB2",
+                "mata_kuliah": "Botani",
+                "kelas": "B",
+                "sks": "3.00",
+                "rumpun": "[PRODI] S1 BIOLOGI",
+                "jadwal": [],
+            }
+        ]
+        meta = {"semester": "20261", "dosen": "Matin Nuhamunada, S.Si., M.Sc.", "dosenId": "1"}
+        clean = clean_lecturer_file(meta, courses, counts, {("BISB2", "B"): 2})
+        assert clean["meta"]["est_sks"] == 1.5
+
 
 class TestCleanAll:
     def test_writes_sessions_and_clean_files(self, tmp_path):
@@ -166,3 +182,40 @@ class TestCleanAll:
         assert data["meta"]["own_entries"] == 1  # only Matin's own session
         assert len(data["courses"][0]["jadwal"]) == 1
         assert not (out / "jadwal_nobody_here_20261.json").exists()
+
+    def test_unscheduled_class_split_across_raw_files(self, tmp_path):
+        # Both lecturers are assigned the same unscheduled class -- clean_all
+        # should split its 4.0 SKS between them rather than crediting each
+        # in full.
+        unscheduled = [
+            {
+                "kode": "K9",
+                "mata_kuliah": "Disertasi",
+                "kelas": "D",
+                "sks": "4.00",
+                "rumpun": "[PRODI] DOKTOR BIOLOGI",
+                "jadwal": [],
+            }
+        ]
+        _write_raw(
+            tmp_path, "matin_nuhamunada_s_si_m_sc", "Matin Nuhamunada, S.Si., M.Sc.", unscheduled, []
+        )
+        _write_raw(
+            tmp_path, "luthfi_nurhidayat_s_si_m_sc", "Luthfi Nurhidayat, S.Si., M.Sc.", unscheduled, []
+        )
+
+        out = tmp_path / "clean"
+        clean_all(
+            tmp_path,
+            "20261",
+            ["Matin Nuhamunada, S.Si., M.Sc.", "Luthfi Nurhidayat, S.Si., M.Sc."],
+            outdir=out,
+        )
+        matin = json.loads(
+            (out / "jadwal_matin_nuhamunada_s_si_m_sc_20261.json").read_text(encoding="utf-8")
+        )
+        luthfi = json.loads(
+            (out / "jadwal_luthfi_nurhidayat_s_si_m_sc_20261.json").read_text(encoding="utf-8")
+        )
+        assert matin["meta"]["est_sks"] == 2.0
+        assert luthfi["meta"]["est_sks"] == 2.0
